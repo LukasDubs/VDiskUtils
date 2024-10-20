@@ -1,17 +1,5 @@
 #pragma once
 
-#define FAT_ATTRIB_READ_ONLY			0x01 
-#define FAT_ATTRIB_HIDDEN				0x02
-#define FAT_ATTRIB_SYSTEM				0x04
-#define FAT_ATTRIB_VOLUME_ID			0x08
-#define FAT_ATTRIB_DIRECTORY			0x10
-#define FAT_ATTRIB_ARCHIVE				0x20
-#define FAT_ATTRIB_LFN					FAT_ATTRIB_READ_ONLY | FAT_ATTRIB_HIDDEN | FAT_ATTRIB_SYSTEM | FAT_ATTRIB_VOLUME_ID
-
-#define EXFAT_ENTRY_TYPE_ENTRY			0x85
-#define EXFAT_ENTRY_TYPE_STREAM			0xC0
-#define EXFAT_ENTRY_TYPE_NAME			0xC1
-
 PACK
 
 typedef struct _FAT_BPB {
@@ -81,14 +69,18 @@ typedef union _FAT_BS {
 	FAT32 fat32;
 } FAT_BS, * PFAT_BS;
 
+#define FAT_FSI_LEAD_SIGNATURE  0x41615252
+#define FAT_FSI_SIGNATURE       0x61417272
+#define FAT_FSI_TRAIL_SIGNATURE 0xAA550000
+
 typedef struct _FAT_FS_INFO {
-	UINT32 lead_signature;
-	UINT8 reserved[480];
-	UINT32 signature;
-	UINT32 c_free_cluster;
-	UINT32 c_start_loooking;
-	UINT8 reserved1[12];
-	UINT32 trail_signature;
+	UINT32 lead_signature;   // FAT_FSI_LEAD_SIGNATURE
+	UINT8 reserved[480];     // zero
+	UINT32 signature;        // FAT_FSI_SIGNATURE
+	UINT32 c_free_cluster;   // number of free clusters
+	UINT32 c_start_loooking; // first cluster to start looking for free clusters
+	UINT8 reserved1[12];     // zero
+	UINT32 trail_signature;  // FAT_FSI_TRAIL_SIGNATURE
 } FAT_FS_INFO, * PFAT_FS_INFO;
 
 typedef struct _EXFAT {
@@ -113,32 +105,47 @@ typedef struct _EXFAT {
 	UINT8 reserved[7];
 } EXFAT, * PEXFAT;
 
+#define FAT_ATTRIB_READ_ONLY			0x01 
+#define FAT_ATTRIB_HIDDEN				0x02
+#define FAT_ATTRIB_SYSTEM				0x04
+#define FAT_ATTRIB_VOLUME_ID			0x08
+#define FAT_ATTRIB_DIRECTORY			0x10
+#define FAT_ATTRIB_ARCHIVE				0x20
+#define FAT_ATTRIB_LFN					(FAT_ATTRIB_READ_ONLY | FAT_ATTRIB_HIDDEN | FAT_ATTRIB_SYSTEM | FAT_ATTRIB_VOLUME_ID)
+
 typedef struct _FAT_DIR83 {
-	char filename[8];
-	char extension[3];
-	UINT8 attribute;
-	UINT8 reserved;
-	UINT8 creation_10th_s;
-	UINT16 creation_time;
-	UINT16 creation_date;
-	UINT16 last_accessed_date;
-	UINT16 cluster_high;
-	UINT16 last_mod_time;
-	UINT16 last_mod_date;
-	UINT16 cluster_low;
-	UINT32 filesize;
+	char filename[8];          // 8 filename chars
+	char extension[3];         // extension
+	UINT8 attribute;           // entry attribute
+	UINT8 reserved;            // reserved for windows NT
+	UINT8 creation_seconds;    // specs say 10th second reality 100th of second (range 0-199)
+	UINT16 creation_time;      // time of creation (bits: 0-4: seconds/2 (0-29), 5-10: minutes (0-60), 11-15: hours (0-23))
+	UINT16 creation_date;      // date of creation (bits: 0-4: day (0-31), 5-8: month (1-12), 9-15: year (0 = 1980))
+	UINT16 last_accessed_date; // date of last access (see creation date)
+	UINT16 cluster_high;       // FAT32: high 2 bytes for cluster number, fat12/16: should be zero
+	UINT16 last_mod_time;      // time of last modifiaction (see creation time)
+	UINT16 last_mod_date;      // date of last modifiaction (see creation date)
+	UINT16 cluster_low;        // lower 2 bytes for cluster number
+	UINT32 filesize;           // size of the file in bytes
 } FAT_DIR83, * PFAT_DIR83;
 
+#define SEQ_NUM_MASK 0x1F
+#define SEQ_FLAG_FIRST_LAST 0x40
+
 typedef struct _FAT_DIR_LONG {
-	UINT8 seq;
-	UINT16 first_chars[5];
-	UINT8 attrib;
-	UINT8 type;
-	UINT8 checksum;
-	UINT16 next_chars[6];
-	UINT16 zero;
-	UINT16 final_chars[2];
+	UINT8 seq;             // sequence number (bits: 0-4: number, 5: reserved, 6: last logical / first physical, 7: reserved)
+	UINT16 first_chars[5]; // name characters
+	UINT8 attrib;          // attribute of entry: always 0x0F for LFN
+	UINT8 type;            // long entry type
+	UINT8 checksum;        // short filename checksum
+	UINT16 next_chars[6];  // name characters
+	UINT16 zero;           // pad/reserved
+	UINT16 final_chars[2]; // name characters
 } FAT_DIR_LONG, * PFAT_DIR_LONG;
+
+#define EXFAT_ENTRY_TYPE_ENTRY			0x85
+#define EXFAT_ENTRY_TYPE_STREAM			0xC0
+#define EXFAT_ENTRY_TYPE_NAME			0xC1
 
 typedef struct _EXFAT_DIR {
 	UINT8 type;
@@ -188,3 +195,11 @@ typedef struct _EXFAT_LONG_NAME {
 } EXFAT_LONG_NAME, * PEXFAT_LONG_NAME;
 
 ENDPACK
+
+#define INVALID_FAT_CHAR(c) ((((c) <= 0x20) && ((c) != 0x5)) /* Control chars are invalid except 0x05 as replacement for 0xE5 */ || \
+							((c) > 0xff) /* UTF-16 chars are invalid */ || \
+							((c) == 0x7C) /*pipe char is invalid*/ || \
+							((c) == 0x7F) /* DEl char is invalid */ || \
+							(((c) < 0x60) && (((0x38000000FC00DC04 >> (((unsigned char)(c)) - 0x20)) & 1) != 0)) /* magic for all invalid characters between 0x20 and 0x60: 0x22, 0x2A, 0x2B, 0x2C, 0x2E, 0x2F, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F, 0x5B, 0x5C, 0x5D */ )
+
+BSTATUS createFATDriver(_In_ PVDISK vdisk, _In_opt_ UINT32 partition_index, _Out_ PFS_DRIVER* driver);

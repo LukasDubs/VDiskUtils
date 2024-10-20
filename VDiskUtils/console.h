@@ -18,6 +18,13 @@ extern HANDLE proc_heap;
 void exePrintf(_In_z_ _Printf_format_string_ const char* _Format, ...);
 void dbgPrintf(_In_z_ _Printf_format_string_ const char* _Format, ...);
 void errPrintf(_In_z_ _Printf_format_string_ const char* _Format, ...);
+BOOL rdCon(_Out_ PVOID buffer, _In_ DWORD n_chars_to_read, _Out_ LPDWORD n_chars_read);
 void cls(int id);
 
-BOOL execCmd(LPWSTR* args, size_t argc);
+#define CMD_STATUS_EXIT 0
+#define CMD_STATUS_SUCCESS 1
+#define CMD_STATUS_FS_CONTEXT 2
+#define CMD_STATUS_CMD_CONTEXT -1
+
+int execCmd(LPWSTR* args, size_t argc);
+int execFsCmd(LPWSTR* args, size_t argc);

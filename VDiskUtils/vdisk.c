@@ -1,5 +1,5 @@
-#include "console.h"
 #include "vdisk.h"
+#include "console.h"
 
 PVDISK* vdisk_list = 0;
 size_t n_vdisk = 0;
@@ -59,7 +59,7 @@ BOOL initVDISKs() {
 	return vdisk_list != 0;
 }
 
-BSTATUS closeVDISKInternal(_In_ PVDISK vdisk) {
+BSTATUS static closeVDISKInternal(_In_ PVDISK vdisk) {
 	if ((vdisk->attributes & VDISK_ATTRIBUTE_FLAG_OPEN) == 0) {
 		errPrintf("Error: File already closed!\n\r");
 		return FALSE;
@@ -83,7 +83,7 @@ BSTATUS closeVDISKInternal(_In_ PVDISK vdisk) {
 	}
 }
 
-BSTATUS dectectVDISKContent(_In_ PVDISK vdisk) {
+BSTATUS static dectectVDISKContent(_In_ PVDISK vdisk) {
 	if (isVHDPresent(vdisk)) {
 		if (!setVHDDriver(vdisk)) {
 			closeVDISKInternal(vdisk);
@@ -96,6 +96,15 @@ BSTATUS dectectVDISKContent(_In_ PVDISK vdisk) {
 		}
 		else {
 			vdisk->attributes |= VDISK_ATTRIBUTE_FLAG_MBR;
+		}
+	}
+	else {
+		exePrintf("No format detected! Type y to enter raw read mode or anything else to continue:");
+		wchar_t c = 0;
+		DWORD read = 0;
+		rdCon(&c, 1, &read);
+		if (c == L'y' || c == L'Y') {
+			vdisk->attributes |= VDISK_ATTRIBUTE_FLAG_RAW;
 		}
 	}
 	return TRUE;
@@ -389,4 +398,74 @@ BSTATUS selectPartition(_In_ size_t index) {
 	}
 	currentPartition = index;
 	return TRUE;
+}
+
+BSTATUS partitionRead(_In_ PVDISK vdisk, _In_opt_ UINT32 partition_index, _In_opt_ size_t offset, _In_ size_t length, _Out_writes_bytes_all_(length) void* buffer) {
+	if (partition_index < vdisk->n_partitions) {
+		PPARTITION part = (PPARTITION)(((size_t)vdisk->partitions) + (size_t)partition_index * sizeof(PARTITION));
+		if (offset + length > part->length) {
+			errPrintf("Read out of bounds!\n\r");
+			return FALSE;
+		}
+		return vdisk->driver->read(vdisk, part->start + offset, length, buffer);
+	}
+	else {
+		if (vdisk->n_partitions == 0) {
+			if ((vdisk->attributes & VDISK_ATTRIBUTE_MASK_VDISK_PARTITION) != VDISK_ATTRIBUTE_FLAG_RAW) {
+				errPrintf("Error: Invalid Partition index!\n\r");
+				return FALSE;
+			}
+			else {
+				return vdisk->driver->read(vdisk, offset, length, buffer);
+			}
+		}
+		else {
+			errPrintf("Error: Invalid Partition index!\n\r");
+			return FALSE;
+		}
+	}
+}
+
+BSTATUS partitionWrite(_In_ PVDISK vdisk, _In_opt_ UINT32 partition_index, _In_opt_ size_t offset, _In_ size_t length, _In_reads_bytes_(length) void* buffer) {
+	if (partition_index < vdisk->n_partitions) {
+		PPARTITION part = (PPARTITION)(((size_t)vdisk->partitions) + (size_t)partition_index * sizeof(PARTITION));
+		if (offset + length > part->length) {
+			errPrintf("Write out of bounds!\n\r");
+			return FALSE;
+		}
+		return vdisk->driver->write(vdisk, part->start + offset, length, buffer);
+	}
+	else {
+		if (vdisk->n_partitions == 0) {
+			if ((vdisk->attributes & VDISK_ATTRIBUTE_MASK_VDISK_PARTITION) != VDISK_ATTRIBUTE_FLAG_RAW) {
+				errPrintf("Error: Invalid Partition index!\n\r");
+				return FALSE;
+			}
+			else {
+				return vdisk->driver->write(vdisk, offset, length, buffer);
+			}
+		}
+		else {
+			errPrintf("Error: Invalid Partition index!\n\r");
+			return FALSE;
+		}
+	}
+}
+
+PFS_DRIVER createDriver(_In_ PVDISK vdisk, _In_opt_ UINT32 partition_index) {
+	PFS_DRIVER drv = 0;
+	if (createFATDriver(vdisk, partition_index, &drv)) {
+		exePrintf("Successfully created FAT driver\n\r");
+		return drv;
+	}
+	return 0;
+}
+
+PFS_DRIVER getSelDrv() {
+	if (currentVDISK >= n_vdisk) {
+		errPrintf("No valid VDISK selected!\n\r");
+		return 0;
+	}
+	PFS_DRIVER driver = 0;
+	return createDriver(vdisk_list[currentVDISK], (DWORD)currentPartition);
 }

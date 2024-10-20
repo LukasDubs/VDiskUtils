@@ -2,31 +2,6 @@
 #include "console.h"
 #include <stdlib.h>
 
-
-
-
-
-
-
-
-
-
-
-// TODO: byteswap where needed
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 typedef struct _VHD_FIXED_DRIVER {
 	VDISK_GET_SIZE getSize;
 	VDISK_READ read;
@@ -105,7 +80,7 @@ BSTATUS getDynamicVHDSize(_In_ PVDISK vdisk, _Inout_ size_t* length) {
 		errPrintf("Wrong vdisk for this driver!\n\r");
 		return FALSE;
 	}
-	*length = VDISK_GET_STRUCT(PVHD_FOOTER, vdisk, drv->footer_offset)->current_size;
+	*length = _byteswap_uint64(VDISK_GET_STRUCT(PVHD_FOOTER, vdisk, drv->footer_offset)->current_size);
 	return TRUE;
 }
 
@@ -121,7 +96,7 @@ BSTATUS dynamicVHDRead(_Inout_ PVDISK vdisk, _In_opt_ size_t offset, _In_ size_t
 	}
 	uint64_t end = offset + length - 1;
 	uint64_t f_off = drv->footer_offset;
-	if (end > VDISK_GET_STRUCT(PVHD_FOOTER, vdisk, f_off)->current_size) {
+	if (end > _byteswap_uint64(VDISK_GET_STRUCT(PVHD_FOOTER, vdisk, f_off)->current_size)) {
 		errPrintf("Read out of bounds!\n\r");
 		return FALSE;
 	}
@@ -310,7 +285,7 @@ BSTATUS dynamicVHDWrite(_Inout_ PVDISK vdisk, _In_opt_ size_t offset, _In_ size_
 		cnt = block_e - block_s;
 
 		uint64_t ptr = (uint64_t)buffer;
-		const uint64_t alloc_sz = (bs + btmp_s) >> 9;
+		const uint32_t alloc_sz = (uint32_t)((bs + btmp_s) >> 9);
 
 		uint64_t start_s = bs - b_off_s;
 		if (*bat_temp == 0xFFFFFFFF) {

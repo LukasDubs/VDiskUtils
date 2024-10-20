@@ -9,7 +9,7 @@ void* outbuf = 0;
 #define CLS L"\x1b[2J\x1b[H"
 
 // forced cls
-BOOL clsf() {
+BOOL static clsf() {
 	CONSOLE_SCREEN_BUFFER_INFO buf;
 	if (!GetConsoleScreenBufferInfo(con_out, &buf)) {
 		return FALSE;
@@ -30,7 +30,7 @@ BOOL clsf() {
 }
 
 // cmd like cls
-BOOL clscmd() {
+BOOL static clscmd() {
 	CONSOLE_SCREEN_BUFFER_INFO csbi;
 	if (!GetConsoleScreenBufferInfo(con_out, &csbi)) {
 		return FALSE;
@@ -57,7 +57,7 @@ BOOL clscmd() {
 }
 
 // escape character based cls
-BOOL clss() {
+BOOL static clss() {
 	DWORD wrt = 0;
 	return WriteConsoleW(con_out, CLS, sizeof(CLS) >> 1, &wrt, 0);
 }
@@ -77,21 +77,15 @@ void cls(int id) {
 	}
 }
 
-// printf doesnt recognize my console so we flush manually
-void flushConsole(int length) {
-	DWORD wrt = 0;
-	WriteConsoleA(con_out, outbuf, (DWORD)length, &wrt, 0);
-}
-
-void pmtPrint(LPCSTR str) {
+void static pmtPrint(_In_z_ _Printf_format_string_ const char* _Format, ...) {
+	int _Length;
+	va_list _ArgList;
+	__crt_va_start(_ArgList, _Format);
+	_Length = _vsprintf_s_l(outbuf, 0x1000, _Format, NULL, _ArgList);
 	SetConsoleTextAttribute(con_out, CON_PMT);
-	DWORD wrt = 0;
-	size_t len = strlen(str);
-	if (len > 0xffffffff) {
-		// wtf you doin
-		return;
-	}
-	WriteConsoleA(con_out, str, (DWORD)len, &wrt, 0);
+	DWORD wrt;
+	WriteConsoleA(con_out, outbuf, (DWORD)_Length, &wrt, 0);
+	__crt_va_end(_ArgList);
 }
 
 //printf wrappers for correct color and console flush
@@ -102,7 +96,8 @@ void exePrintf(_In_z_ _Printf_format_string_ const char* _Format, ...) {
 	__crt_va_start(_ArgList, _Format);
 	_Length = _vsprintf_s_l(outbuf, 0x1000, _Format, NULL, _ArgList);
 	SetConsoleTextAttribute(con_out, CON_EXE);
-	flushConsole(_Length);
+	DWORD wrt;
+	WriteConsoleA(con_out, outbuf, (DWORD)_Length, &wrt, 0);
 	__crt_va_end(_ArgList);
 }
 
@@ -112,7 +107,8 @@ void dbgPrintf(_In_z_ _Printf_format_string_ const char* _Format, ...) {
 	__crt_va_start(_ArgList, _Format);
 	_Length = _vsprintf_s_l(outbuf, 0x1000, _Format, NULL, _ArgList);
 	SetConsoleTextAttribute(con_out, CON_DBG);
-	flushConsole(_Length);
+	DWORD wrt;
+	WriteConsoleA(con_out, outbuf, (DWORD)_Length, &wrt, 0);
 	__crt_va_end(_ArgList);
 }
 
@@ -122,11 +118,16 @@ void errPrintf(_In_z_ _Printf_format_string_ const char* _Format, ...) {
 	__crt_va_start(_ArgList, _Format);
 	_Length = _vsprintf_s_l(outbuf, 0x1000, _Format, NULL, _ArgList);
 	SetConsoleTextAttribute(con_out, CON_ERR);
-	flushConsole(_Length);
+	DWORD wrt;
+	WriteConsoleA(con_out, outbuf, (DWORD)_Length, &wrt, 0);
 	__crt_va_end(_ArgList);
 }
 
-int WINAPI CALLBACK WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPSTR lpCmdLine, _In_ int nShowCmd) {
+BOOL rdCon(_Out_ PVOID buffer, _In_ DWORD n_chars_to_read, _Out_ LPDWORD n_chars_read) {
+	return ReadConsoleW(con_in, buffer, n_chars_to_read, n_chars_read, 0);
+}
+
+int __stdcall WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPSTR lpCmdLine, _In_ int nShowCmd) {
 	LPWSTR cmdl = GetCommandLineW();
 	//TODO parse args
 
@@ -160,8 +161,15 @@ int WINAPI CALLBACK WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevIn
 	if (!args) {
 		return GetLastError();
 	}
+	int context = -1;
+	LPWSTR path = L"/";
 	while (1) {
-		pmtPrint(">>");
+		if (context == -1) {
+			pmtPrint(">>");
+		}
+		else if (context == 2) {
+			pmtPrint("%ws$", path);
+		}
 		SetConsoleTextAttribute(con_out, CON_USR);
 		read = 0;
 		LPWSTR cmdbuf = o_cmdbuf;
@@ -228,8 +236,27 @@ int WINAPI CALLBACK WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevIn
 				*(cmdbuf - 1) = 0;
 				args[argc - 1]++;
 			}
-			
-			if (!execCmd(args, argc)) {
+			int st = 0;
+			if (context == -1) {
+				st = execCmd(args, argc);
+			}
+			else if (context == 2) {
+				st = execFsCmd(args, argc);
+			}
+			else {
+				st = -1;
+			}
+			if (st == -1) {
+				context = -1;
+			}
+			else if (st == 0) {
+				break;
+			}
+			else if (st == 2) {
+				context = 2;
+			}
+			else if(st != 1) {
+				errPrintf("Invalid return value!\n\r");
 				break;
 			}
 
