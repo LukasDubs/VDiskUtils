@@ -1024,6 +1024,28 @@ NTSTATUS static fat32GetFile(_In_ PFAT_DRIVER_IMPL drv, _In_ LPCWSTR* tokens, _I
             }
             else if (wcscmp(tokens[i], L"..") == 0) {
                 is8_3 = TRUE;
+
+                name[0] = '.';
+                name[1] = '.';
+                name[2] = ' ';
+                name[3] = ' ';
+                name[4] = ' ';
+                name[5] = ' ';
+                name[6] = ' ';
+                name[7] = ' ';
+                ext[0] = ' ';
+                ext[1] = ' ';
+                ext[2] = ' ';
+                if (!_8_3_NameCmp(&(dir[1]), name, ext)) {
+                    if (cluster == drv->params.root_cluster) {
+                        status = STATUS_OBJECT_PATH_INVALID;
+                    }
+                    else {
+                        status = STATUS_DISK_CORRUPT_ERROR;
+                    }
+                    goto fat32GetFile_err;
+                }
+
                 index = 1;
                 goto _found_dir;
             }
@@ -1105,41 +1127,50 @@ NTSTATUS static fat32GetFile(_In_ PFAT_DRIVER_IMPL drv, _In_ LPCWSTR* tokens, _I
     }
 
     if (is_dir) {
-        // search for '..' entry
-        size_t len;
-        PFAT_DIR83 dirs;
-        status = readFat32Data(drv, cluster, &dirs, &len);
-        if (status < 0) {
-            goto fat32GetFile_err;
-        }
-        
-        char name[8];
-        char ext[3];
-        name[0] = '.';
-        name[1] = '.';
-        name[2] = ' ';
-        name[3] = ' ';
-        name[4] = ' ';
-        name[5] = ' ';
-        name[6] = ' ';
-        name[7] = ' ';
-        ext[0] = ' ';
-        ext[1] = ' ';
-        ext[2] = ' ';
 
-        if (_8_3_NameCmp(&(dirs[1]), name, ext)) {
-            UINT32 clst = ((UINT32)(dirs[2].cluster_high) << 16) | (UINT32)(dirs[2].cluster_low);;
-            if (clst != 0)
-                *out_parent_cluster = clst;
-            else
-                *out_parent_cluster = drv->params.root_cluster;
-        }
-        else {
-            // assume root dir
+        if (cluster == drv->params.root_cluster) {
             *out_parent_cluster = 0xFFFFFFFF;
         }
+        else {
 
-        VirtualFree(dirs, 0, MEM_RELEASE);
+            // search for '..' entry
+            size_t len;
+            PFAT_DIR83 dirs;
+            status = readFat32Data(drv, cluster, &dirs, &len);
+            if (status < 0) {
+                goto fat32GetFile_err;
+            }
+
+            char name[8];
+            char ext[3];
+            name[0] = '.';
+            name[1] = '.';
+            name[2] = ' ';
+            name[3] = ' ';
+            name[4] = ' ';
+            name[5] = ' ';
+            name[6] = ' ';
+            name[7] = ' ';
+            ext[0] = ' ';
+            ext[1] = ' ';
+            ext[2] = ' ';
+
+            if (_8_3_NameCmp(&(dirs[1]), name, ext)) {
+                UINT32 clst = ((UINT32)(dirs[2].cluster_high) << 16) | (UINT32)(dirs[2].cluster_low);;
+                if (clst != 0)
+                    *out_parent_cluster = clst;
+                else
+                    *out_parent_cluster = drv->params.root_cluster;
+            }
+            else {
+                // directory corrupt
+                VirtualFree(dirs, 0, MEM_RELEASE);
+                status = STATUS_DISK_CORRUPT_ERROR;
+                goto fat32GetFile_err;
+            }
+
+            VirtualFree(dirs, 0, MEM_RELEASE);
+        }
     }
     else {
         *out_parent_cluster = parent_cluster;

@@ -93,48 +93,60 @@ size_t static prepStr(LPWSTR arg0) {
 	return arg0l;
 }
 
+#define CLS_HELP "cls: [-c|-s|-f|-h]\n\r\t-c\t\tcmd-like cls\n\r\t-s\t\tuses special string to cls\n\r\t-f\t\tforcefully overwrites screenbuffer\n\r\t-h\t\tprints this info\n\rdefaults when no arg specified to -c\n\r"
+#define RAW_HELP "raw: read|write\n\r\tread\t\tperform a raw read on the disk\n\r\twrite\t\tperforms a raw write to the disk\n\r"
+#define LIST_HELP "list [vdisk | partition]\n\r"
+#define OPEN_HELP "open [-i index | -f \"path\"]\n\r\t-i\t\tindex of vdisk to be opened\n\r\t-f\t\tpath to file to be opened\n\r\t-h\t\tshows this info\n\r"
+#define CLOSE_HELP "close [\"index of vdisk to close\"]\n\r"
+
+__inline static void clscmd(LPWSTR* args, size_t argc) {
+	if (argc > 2) {
+		errPrintf("Invalid number of cls args\n\r");
+	}
+	else if (argc == 2) {
+		if (wcscmp(args[1], L"-s") == 0) {
+			cls(1);
+		}
+		else if (wcscmp(args[1], L"-c") == 0) {
+			cls(0);
+		}
+		else if (wcscmp(args[1], L"-f") == 0) {
+			cls(2);
+		}
+		else if (wcscmp(args[1], L"-h") == 0) {
+			exePrintf(CLS_HELP);
+		}
+		else {
+			errPrintf("Invalid arg! (-h for help)\n\r");
+		}
+	}
+	else {
+		cls(0);
+	}
+}
+
 int execCmd(LPWSTR* args, size_t argc) {
 	if (argc == 0)return CMD_STATUS_SUCCESS;
 	LPWSTR arg0 = args[0];
 	size_t arg0l = prepStr(arg0);
 	if (arg0l == 3) {
 		if (wcsncmp(arg0, L"cls", 3) == 0) {
-			if (argc > 2) {
-				errPrintf("Invalid number of cls args\n\r");
-			}
-			else if (argc == 2) {
-				if (wcscmp(args[1], L"-s") == 0) {
-					cls(1);
-				}
-				else if (wcscmp(args[1], L"-c") == 0) {
-					cls(0);
-				}
-				else if (wcscmp(args[1], L"-f") == 0) {
-					cls(2);
-				}
-				else if (wcscmp(args[1], L"-h") == 0) {
-					exePrintf("cls: [-c|-s|-f|-h]\n\r\t-c\t\tcmd-like cls\n\r\t-s\t\tuses special string to cls\n\r\t-f\t\tforcefully overwrites screenbuffer\n\r\t-h\t\tprints this info\n\rdefaults when no arg specified to -c\n\r");
-				}
-				else {
-					errPrintf("Invalid arg! (-h for help)\n\r");
-				}
-			}
-			else {
-				cls(0);
-			}
+			clscmd(args, argc);
 		}
 		else if (wcsncmp(arg0, L"raw", 3) == 0) {
 			if (argc == 1) {
-				exePrintf("raw: read|write\n\r\tread\t\tperform a raw read on the disk\n\r\twrite\t\tperforms a raw write to the disk\n\r");
+				exePrintf(RAW_HELP);
 			}
 			else if(wcscmp(args[1], L"read") == 0) {
 				//TODO
+				errPrintf("Not Implemented!\n\r");
 			}
 			else if (wcscmp(args[1], L"write") == 0) {
 				//TODO
+				errPrintf("Not Implemented!\n\r");
 			}
 			else if (wcscmp(args[1], L"-h") == 0) {
-				exePrintf("raw: read|write\n\r\tread\t\tperform a raw read on the disk\n\r\twrite\t\tperforms a raw write to the disk\n\r");
+				exePrintf(RAW_HELP);
 			}
 		}
 		else {
@@ -161,18 +173,18 @@ int execCmd(LPWSTR* args, size_t argc) {
 					listPartitions();
 				}
 				else if (wcscmp(args[1], L"-h") == 0) {
-					exePrintf("list [vdisk | partition]\n\r");
+					exePrintf(LIST_HELP);
 				}
 				else {
 					errPrintf("Invalid Command!\n\r");
 				}
 			}
 			else {
-				exePrintf("list [vdisk | partition]\n\r");
+				exePrintf(LIST_HELP);
 			}
 		}
 		else if (wcsncmp(arg0, L"help", 4) == 0) {
-			//TODO
+			exePrintf("Implemented Commands:\n\r\tcls\t\tclears the screen\n\r\texit\t\texits the tool\n\r\tlist\t\tlist vdisks\n\r\thelp\t\tshows this info\n\r\topen\t\topen a vdisk\n\r\tclose\t\tcloses the selected vdisk\n\r\tenter\t\tenters Filesystem-Management mode\n\r\tselect\t\tselects a vdisk\n\r");
 		}
 		else if (wcsncmp(arg0, L"open", 4) == 0) {
 			if (argc > 1) {
@@ -198,7 +210,7 @@ int execCmd(LPWSTR* args, size_t argc) {
 					}
 				}
 				else if(wcscmp(args[1], L"-h") == 0) {
-					exePrintf("open [-i index | -f \"path\"]\n\r\t-i\t\tindex of vdisk to be opened\n\r\t-f\t\tpath to file to be opened\n\r\t-h\t\tshows this info\n\r");
+					exePrintf(OPEN_HELP);
 				}
 				else {
 					exePrintf("open [-i index | -f \"path\"]\n\r");
@@ -217,8 +229,8 @@ int execCmd(LPWSTR* args, size_t argc) {
 	else if (arg0l == 5) {
 		if (wcsncmp(arg0, L"close", 5) == 0) {
 			if (argc == 2) {
-				if (wcscmp(args[1], L"- h") == 0) {
-					exePrintf("close [\"index of vdisk to close\"]\n\r");
+				if (wcscmp(args[1], L"-h") == 0) {
+					exePrintf(CLOSE_HELP);
 				}
 				else {
 					size_t index = 0;
@@ -310,6 +322,7 @@ int execCmd(LPWSTR* args, size_t argc) {
 		}
 		else if (wcsncmp(arg0, L"create", 6) == 0) {
 			//TODO
+			errPrintf("Not Implemented!\n\r");
 		}
 		else {
 			errPrintf("Invalid Command!\n\r");
@@ -319,12 +332,15 @@ int execCmd(LPWSTR* args, size_t argc) {
 		if (wcscmp(arg0, L"attribute") == 0) {
 			if (wcscmp(args[1], L"get") == 0) {
 				//TODO
+				errPrintf("Not Implemented!\n\r");
 			}
 			else if (wcscmp(args[1], L"set") == 0) {
 				//TODO
+				errPrintf("Not Implemented!\n\r");
 			}
 			else {
 				//TODO
+				errPrintf("Not Implemented!\n\r");
 			}
 		}
 		else {
@@ -350,7 +366,7 @@ int execFsCmd(LPWSTR* args, size_t argc) {
 				errPrintf("Invalid directory");
 			}
 			else {
-
+				errPrintf("Not Implemented!\n\r");
 			}
 		}
 		else if (wcsncmp(arg0, L"cd", 2) == 0) {
@@ -386,29 +402,7 @@ int execFsCmd(LPWSTR* args, size_t argc) {
 	}
 	else if (arg0l == 3) {
 		if (wcsncmp(arg0, L"cls", 3) == 0) {
-			if (argc > 2) {
-				errPrintf("Invalid number of cls args\n\r");
-			}
-			else if (argc == 2) {
-				if (wcscmp(args[1], L"-s") == 0) {
-					cls(1);
-				}
-				else if (wcscmp(args[1], L"-c") == 0) {
-					cls(0);
-				}
-				else if (wcscmp(args[1], L"-f") == 0) {
-					cls(2);
-				}
-				else if (wcscmp(args[1], L"-h") == 0) {
-					exePrintf("cls: [-c|-s|-f|-h]\n\r\t-c\t\tcmd-like cls\n\r\t-s\t\tuses special string to cls\n\r\t-f\t\tforcefully overwrites screenbuffer\n\r\t-h\t\tprints this info\n\rdefaults when no arg specified to -c\n\r");
-				}
-				else {
-					errPrintf("Invalid arg! (-h for help)\n\r");
-				}
-			}
-			else {
-				cls(0);
-			}
+			clscmd(args, argc);
 		}
 		else {
 			errPrintf("Invalid Command!\n\r");
@@ -436,6 +430,9 @@ int execFsCmd(LPWSTR* args, size_t argc) {
 			driver->exit(driver);
 			driver = 0;
 			return CMD_STATUS_CMD_CONTEXT;
+		}
+		else if (wcsncmp(arg0, L"help", 4) == 0) {
+			exePrintf("Implemented Commands:\n\r\tcd\t\tchanges the current dir\n\r\tcls\t\tclears the screen\n\r\topen\t\topens a file\n\r\texit\t\texits FS-Manager mode\n\r\tclose\t\tcloses the currently open file\n\r\tattribute\t\tget/set the attribute of a file\n\r");
 		}
 		else {
 			errPrintf("Invalid Command!\n\r");
@@ -620,7 +617,7 @@ int execFsCmd(LPWSTR* args, size_t argc) {
 					}
 				}
 				else if (wcscmp(args[1], L"set") == 0) {
-
+					errPrintf("Not Implemented!\n\r");
 				}
 				else {
 					exePrintf("usage: attribute get|set \"attribute\" \"value\"\n\r");
