@@ -13,10 +13,12 @@ void static fatDriverDelete(PFAT_DRIVER_IMPL driver) {
     for (DWORD i = 0; i < FAT_MAX_HANDLES; i++) {
         PFAT_HANDLE hdl = &(driver->handle_table[i]);
         if ((hdl->flags & HANDLE_FLAG_OPEN)) {
+            if (hdl->query == 0) continue;
             if ((hdl->flags & HANDLE_FLAG_QUERY) != 0) {
+#pragma warning(disable : 6001)
                 VirtualFree(hdl->query->dir_cache, 0, MEM_RELEASE);
-                memset(hdl->query, 0, ((size_t)hdl->query->recursion_limit + 3) << 2);
-                HeapFree(proc_heap, 0, hdl->query);
+                VirtualFree(hdl->query, 0, MEM_RELEASE);
+#pragma warning(default : 6001)
             }
             else {
                 deletePath(hdl->path);
@@ -29,7 +31,7 @@ void static fatDriverDelete(PFAT_DRIVER_IMPL driver) {
 }
 
 BSTATUS createFATDriver(_In_ PVDISK vdisk, _In_opt_ UINT32 partition_index, _Out_ PFS_DRIVER* driver) {
-	void* buffer = VirtualAlloc(0, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    void* buffer = HeapAlloc(proc_heap, 0, 0x200);
 	if (buffer == 0) {
 		return FALSE;
 	}
@@ -90,6 +92,7 @@ BSTATUS createFATDriver(_In_ PVDISK vdisk, _In_opt_ UINT32 partition_index, _Out
         drv->params.n_sectors = bpb->n_sectors == 0 ? bpb->n_large_sectors : bpb->n_sectors;
         drv->params.bytes_per_cluster = bps * (size_t)(bpb->sectors_per_cluster);
         if (coc < 65525) {
+            // FAT12 and FAt16 have the same parameters
             drv->params.sectors_per_fat = bpb->sectors_per_fat;
             drv->params.bytes_per_fat = (size_t)(bpb->sectors_per_fat) * bps;
             drv->params.root_offset = drv->params.bytes_per_fat * bpb->n_fats + ((size_t)(drv->params.n_res_sectors) * bps);
@@ -139,7 +142,7 @@ BSTATUS createFATDriver(_In_ PVDISK vdisk, _In_opt_ UINT32 partition_index, _Out
             drv->params.data_offset = drv->params.bytes_per_fat * bpb->n_fats + ((size_t)(drv->params.n_res_sectors) * bps);
             drv->params.data_size = ((size_t)(drv->params.n_sectors) - (size_t)(drv->params.n_res_sectors) - (size_t)(drv->params.n_fats) * (size_t)(drv->params.sectors_per_fat)) * bps;
             drv->start_looking = 2; // TODO: get start_looking from fs_info
-            drv->n_free_clus = ~0;  // TODO: get free_clusters from fs_info
+            drv->n_free_clus = 0xFFFFFFFF;  // TODO: get free_clusters from fs_info
             drv->flags = FAT_FLAG_FAT32;
             drv->interf.fs_type = FS_DRIVER_TYPE_FAT32;
             drv->interf.open = fat32Open;
@@ -151,11 +154,12 @@ BSTATUS createFATDriver(_In_ PVDISK vdisk, _In_opt_ UINT32 partition_index, _Out
             drv->interf.get_info = fat32GetInfo;
             drv->interf.set_info = fat32SetInfo;
         }
-
         drv->handle_table = VirtualAlloc(0, FAT_MAX_HANDLES * sizeof(FAT_HANDLE), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
         if (drv->handle_table == 0) {
             goto fat_is_p_exit;
         }
+        memset(buffer, 0, 0x200);
+        HeapFree(proc_heap, 0, buffer);
         drv->interf.exit = fatDriverDelete;
         drv->interf.partition_index = partition_index;
         drv->interf.vdisk = vdisk;
@@ -168,7 +172,8 @@ BSTATUS createFATDriver(_In_ PVDISK vdisk, _In_opt_ UINT32 partition_index, _Out
 		goto fat_is_p_exit;
 	}
 fat_is_p_exit:
-	VirtualFree(buffer, 0, MEM_RELEASE);
+    memset(buffer, 0, 0x200);
+	HeapFree(proc_heap, 0, buffer);
     if (drv) {
         memset(drv, 0, sizeof(FAT_DRIVER_IMPL));
         HeapFree(proc_heap, 0, drv);
@@ -179,7 +184,8 @@ fat_is_p_exit:
 // UTILITY
 
 DWORD static __inline allocateHandle(_In_ PFAT_DRIVER_IMPL drv) {
-    for (DWORD i = 0; i < FAT_MAX_HANDLES; i++) {
+    // start loop at 1 since 0 can be considered an invaid handle
+    for (DWORD i = 1; i < FAT_MAX_HANDLES; i++) {
         if (!(drv->handle_table[i].flags & HANDLE_FLAG_OPEN)) {
             return i;
         }
@@ -265,7 +271,6 @@ BSTATUS static parsePath(_In_ LPCWSTR usr_path, _Out_ LPWSTR* path, _Out_ LPWSTR
 #pragma warning(disable : 6101) // following function too complex for intellisense to get it right
 // 8.3 Filename Generation:
 /*
-* Convert to uppercase (not always)
 * Convert to OEM: if(not valid character) {
 *   replace with '_'
 *   set lossy conversion
@@ -414,7 +419,7 @@ _mk83_pad_all:
         b_name[j] = ' ';
     }
 _mk83_pad_ext:
-    // pas extension
+    // pad extension
     b_extend[0] = ' ';
     b_extend[1] = ' ';
     b_extend[2] = ' ';
@@ -509,6 +514,202 @@ NTSTATUS static getLongName(_In_ PFAT_DIR_LONG ents, _In_opt_ size_t index, _Out
 #pragma warning(default : 6386)
 #pragma warning(default : 6054)
 
+NTSTATUS static getName(_In_ PFAT_DIR83 ents, _In_ size_t index, _In_ PFS_NAME_INFO name, _In_ BOOL noLFN, _In_ BOOL no83) {
+    NTSTATUS status = STATUS_SUCCESS;
+    size_t base_len = 8;
+    size_t ext_len = 0;
+    PWSTR lfn = 0;
+    BOOL lfn_exist;
+    if (noLFN) {
+        lfn_exist = FALSE;
+        goto _skip_lfn;
+    }
+    else {
+        lfn_exist = TRUE;
+    }
+    lfn = HeapAlloc(proc_heap, 0, 512);
+    if (lfn == 0) {
+        errPrintf("HeapAlloc failed:%x\n\r", GetLastError());
+        status = STATUS_INTERNAL_ERROR;
+        return status;
+    }
+    memset(lfn, 0, 512);
+    status = getLongName((PFAT_DIR_LONG)ents, index, lfn);
+    if (status != 0) {
+        if (status == STATUS_NOT_FOUND) {
+            lfn_exist = FALSE;
+            goto _8_3_Only;
+        }
+        goto _exit_get_name;
+    }
+
+    size_t l = wcsnlen(lfn, 256);
+    if (l == 0) {
+        lfn_exist = FALSE;
+        goto _8_3_Only;
+    }
+    if (l > name->long_name_max_length) {
+        status = STATUS_BUFFER_TOO_SMALL;
+        name->long_name_length = (uint32_t)l;
+        goto _exit_get_name;
+    }
+_skip_lfn:
+    if (no83) {
+        goto _skip_83;
+    }
+_8_3_Only:
+    status = 0;
+    size_t i = 8;
+    while (i != 0) {
+        --i;
+        if (ents[index].filename[i] != ' ') {
+            break;
+        }
+        --base_len;
+    }
+    if (ents[index].extension[2] != ' ') {
+        ext_len = 4;
+    }
+    else if (ents[index].extension[1] != ' ') {
+        ext_len = 3;
+    }
+    else if (ents[index].extension[0] != ' ') {
+        ext_len = 2;
+    }
+
+    if (!no83) {
+        size_t fl = base_len + ext_len;
+        name->name_8_3_length = (uint32_t)fl + 1;
+
+        if (fl > name->name_8_3_max_length) {
+            status = STATUS_BUFFER_TOO_SMALL;
+            goto _exit_get_name;
+        }
+        memcpy(name->name_8_3, &(ents[index].filename), base_len);
+
+        if (ext_len != 0) {
+            name->name_8_3[base_len] = '.';
+            memcpy(&(name->name_8_3[base_len + 1]), &(ents[index].extension), ext_len - 1);
+        }
+        if (fl < name->name_8_3_max_length)
+            name->name_8_3[fl] = 0;
+    }
+_skip_83:
+    if (lfn_exist) {
+        name->long_name_length = (uint32_t)l;
+        memcpy(name->long_name, lfn, l << 1);
+    }
+    else if(!noLFN) {
+        size_t fl = base_len + ext_len;
+        name->long_name_length = (uint32_t)fl;
+
+        if (fl >= name->long_name_max_length) {
+            status = STATUS_BUFFER_TOO_SMALL;
+            goto _exit_get_name;
+        }
+        size_t pos = 0;
+        for (i = 0; i < base_len; i++) {
+            name->long_name[pos] = (unsigned short)((unsigned char)ents[index].filename[i]);
+            ++pos;
+        }
+        if (ext_len != 0) {
+            name->long_name[pos] = L'.';
+            ++pos;
+            for (i = 0; i < ext_len - 1; i++) {
+                name->long_name[pos] = (unsigned short)((unsigned char)ents[index].extension[i]);
+            }
+        }
+        if(fl > name->long_name_max_length)
+            name->long_name[fl] = 0;
+    }
+
+    status = STATUS_SUCCESS;
+
+_exit_get_name:
+    if (!noLFN) {
+        HeapFree(proc_heap, 0, lfn);
+    }
+    return status;
+}
+
+BSTATUS static getDate(_In_ PFAT_DIR83 dt, _In_ PFS_DATE_INFO date) {
+    NTSTATUS status = 0;
+    SYSTEMTIME systime = { 0 };
+    FILETIME creation;
+    FILETIME modified;
+    FILETIME accessed;
+
+    systime.wMilliseconds = ((WORD)(dt->creation_seconds) % 100) * 10;
+    systime.wSecond = ((WORD)(dt->creation_seconds) / 100) + (((dt->creation_time) & 0x1F) << 1);
+    systime.wMinute = ((dt->creation_time) & 0x7E0) >> 5;
+    systime.wHour = ((dt->creation_time) & 0xF800) >> 11;
+    systime.wDayOfWeek = 0; // not needed
+    systime.wDay = ((dt->creation_date) & 0x1F);
+    systime.wMonth = (((dt->creation_date) & 0x1E0) >> 5);
+    systime.wYear = (((dt->creation_date) & 0xFE00) >> 9) + 1980;
+    if (!SystemTimeToFileTime(&systime, &creation)) {
+        errPrintf("error converting creation date:%x\n\r", GetLastError());
+        status = STATUS_INTERNAL_ERROR;
+        return FALSE;
+    }
+
+    systime.wMilliseconds = 0;
+    systime.wSecond = ((dt->last_mod_time) & 0x1F) << 1;
+    systime.wMinute = ((dt->last_mod_time) & 0x7E0) >> 5;
+    systime.wHour = ((dt->last_mod_time) & 0xF800) >> 11;
+    systime.wDayOfWeek = 0; // not needed
+    systime.wDay = ((dt->last_mod_date) & 0x1F);
+    systime.wMonth = (((dt->last_mod_date) & 0x1E0) >> 5);
+    systime.wYear = (((dt->last_mod_date) & 0xFE00) >> 9) + 1980;
+    if (!SystemTimeToFileTime(&systime, &modified)) {
+        errPrintf("error converting modified date:%x\n\r", GetLastError());
+        status = STATUS_INTERNAL_ERROR;
+        return FALSE;
+    }
+
+    systime.wMilliseconds = 0;
+    systime.wSecond = 0;
+    systime.wMinute = 0;
+    systime.wHour = 0;
+    systime.wDayOfWeek = 0; // not needed
+    systime.wDay = ((dt->last_accessed_date) & 0x1F);
+    systime.wMonth = (((dt->last_accessed_date) & 0x1E0) >> 5);
+    systime.wYear = (((dt->last_accessed_date) & 0xFE00) >> 9) + 1980;
+    if (!SystemTimeToFileTime(&systime, &accessed)) {
+        errPrintf("error converting modified date:%x\n\r", GetLastError());
+        status = STATUS_INTERNAL_ERROR;
+        return FALSE;
+    }
+
+    date->creation = creation;
+    date->last_modified = modified;
+    date->last_accessed = accessed;
+    return TRUE;
+}
+
+size_t static getNextImpl(_In_ PFAT_DIR83 ents, _In_ size_t start, _In_ size_t max) {
+    PFAT_DIR83 nent = &(ents[start]);
+    while (1) {
+        if (start == max) {
+            return 0xFFFFFFFFFFFFFFFF;
+        }
+        else if (nent->filename[0] == 0) {
+            return 0xFFFFFFFFFFFFFFFF;
+        }
+        else if (((UINT8)(nent->filename)[0]) == (UINT8)0xE5) {
+            ++start;
+            nent = &(ents[start]);
+        }
+        else if (nent->attribute == FAT_ATTRIB_LFN) {
+            ++start;
+            nent = &(ents[start]);
+        }
+        else {
+            return start;
+        }
+    }
+}
+
 // FAT12
 
 NTSTATUS fat12Open(_In_ PFAT_DRIVER_IMPL drv, _In_ LPCWSTR path, _In_opt_ HANDLE current_dir, _Out_ PHANDLE handle) {
@@ -566,7 +767,7 @@ NTSTATUS fat12Write(_In_ PFAT_DRIVER_IMPL drv, _In_ HANDLE file, _In_opt_ size_t
     return STATUS_NOT_IMPLEMENTED;
 }
 
-NTSTATUS fat12GetInfo(_In_ PFAT_DRIVER_IMPL drv, _In_ HANDLE handle, _In_ FS_INFO_TYPE info, _Inout_updates_bytes_(data_size) PVOID query_data, _In_ DWORD data_size) {
+NTSTATUS fat12GetInfo(_In_ PFAT_DRIVER_IMPL drv, _In_ HANDLE handle, _In_ FS_INFO_TYPE info, _Inout_updates_bytes_opt_(data_size) PVOID query_data, _In_opt_ DWORD data_size) {
     if ((drv == 0) || ((drv->flags & 0xff) != FAT_FLAG_VALID) || ((drv->flags & FAT_MASK_FAT) != FAT_FLAG_FAT12)) {
         return STATUS_INVALID_PARAMETER;
     }
@@ -637,7 +838,7 @@ NTSTATUS fat16Write(_In_ PFAT_DRIVER_IMPL drv, _In_ HANDLE file, _In_opt_ size_t
     return STATUS_NOT_IMPLEMENTED;
 }
 
-NTSTATUS fat16GetInfo(_In_ PFAT_DRIVER_IMPL drv, _In_ HANDLE handle, _In_ FS_INFO_TYPE info, _Inout_updates_bytes_(data_size) PVOID query_data, _In_ DWORD data_size) {
+NTSTATUS fat16GetInfo(_In_ PFAT_DRIVER_IMPL drv, _In_ HANDLE handle, _In_ FS_INFO_TYPE info, _Inout_updates_bytes_opt_(data_size) PVOID query_data, _In_opt_ DWORD data_size) {
     if ((drv == 0) || ((drv->flags & 0xff) != FAT_FLAG_VALID) || ((drv->flags & FAT_MASK_FAT) != FAT_FLAG_FAT16)) {
         return STATUS_INVALID_PARAMETER;
     }
@@ -1015,8 +1216,8 @@ NTSTATUS static fat32GetFile(_In_ PFAT_DRIVER_IMPL drv, _In_ LPCWSTR* tokens, _I
                 status = STATUS_INVALID_PARAMETER;
                 goto fat32GetFile_err;
             }
-            char name[8];
-            char ext[3];
+            char name[8] = { 0 };
+            char ext[3] = { 0 };
             BOOL is8_3;
             BOOL lossy;
             if (wcscmp(tokens[i], L".") == 0) {
@@ -1024,19 +1225,7 @@ NTSTATUS static fat32GetFile(_In_ PFAT_DRIVER_IMPL drv, _In_ LPCWSTR* tokens, _I
             }
             else if (wcscmp(tokens[i], L"..") == 0) {
                 is8_3 = TRUE;
-
-                name[0] = '.';
-                name[1] = '.';
-                name[2] = ' ';
-                name[3] = ' ';
-                name[4] = ' ';
-                name[5] = ' ';
-                name[6] = ' ';
-                name[7] = ' ';
-                ext[0] = ' ';
-                ext[1] = ' ';
-                ext[2] = ' ';
-                if (!_8_3_NameCmp(&(dir[1]), name, ext)) {
+                if (strncmp(&((dir[1]).filename[0]), "..         ", 11) != 0) {
                     if (cluster == drv->params.root_cluster) {
                         status = STATUS_OBJECT_PATH_INVALID;
                     }
@@ -1092,7 +1281,7 @@ NTSTATUS static fat32GetFile(_In_ PFAT_DRIVER_IMPL drv, _In_ LPCWSTR* tokens, _I
             _found_dir:
                 parent_cluster = cluster;
                 is_dir = (dir[index].attribute & FAT_ATTRIB_DIRECTORY) != 0;
-                if (i + 1 == n_tokens) {
+                if ((i + 1) == n_tokens) {
                     cluster = ((UINT32)(dir[index].cluster_high) << 16) | (UINT32)(dir[index].cluster_low);
                     if (cluster == 0)
                         cluster = drv->params.root_cluster;
@@ -1126,6 +1315,9 @@ NTSTATUS static fat32GetFile(_In_ PFAT_DRIVER_IMPL drv, _In_ LPCWSTR* tokens, _I
         chbuf = 0;
     }
 
+    VirtualFree(dir, 0, MEM_RELEASE);
+    dir = 0;
+
     if (is_dir) {
 
         if (cluster == drv->params.root_cluster) {
@@ -1135,28 +1327,14 @@ NTSTATUS static fat32GetFile(_In_ PFAT_DRIVER_IMPL drv, _In_ LPCWSTR* tokens, _I
 
             // search for '..' entry
             size_t len;
-            PFAT_DIR83 dirs;
+            PFAT_DIR83 dirs = 0;
             status = readFat32Data(drv, cluster, &dirs, &len);
             if (status < 0) {
                 goto fat32GetFile_err;
             }
 
-            char name[8];
-            char ext[3];
-            name[0] = '.';
-            name[1] = '.';
-            name[2] = ' ';
-            name[3] = ' ';
-            name[4] = ' ';
-            name[5] = ' ';
-            name[6] = ' ';
-            name[7] = ' ';
-            ext[0] = ' ';
-            ext[1] = ' ';
-            ext[2] = ' ';
-
-            if (_8_3_NameCmp(&(dirs[1]), name, ext)) {
-                UINT32 clst = ((UINT32)(dirs[2].cluster_high) << 16) | (UINT32)(dirs[2].cluster_low);;
+            if (strncmp(&(dirs[1].filename[0]), "..         ", 11) == 0) {
+                UINT32 clst = ((UINT32)(dirs[1].cluster_high) << 16) | (UINT32)(dirs[1].cluster_low);
                 if (clst != 0)
                     *out_parent_cluster = clst;
                 else
@@ -1183,7 +1361,7 @@ NTSTATUS static fat32GetFile(_In_ PFAT_DRIVER_IMPL drv, _In_ LPCWSTR* tokens, _I
     return 0;
 
 fat32GetFile_err:
-    if(dir) VirtualFree(dir, 0, MEM_RELEASE);
+    if(dir != 0) VirtualFree(dir, 0, MEM_RELEASE);
     if (chbuf != 0) {
         memset(chbuf, 0, 512);
         HeapFree(proc_heap, 0, chbuf);
@@ -1272,8 +1450,7 @@ NTSTATUS fat32Close(_In_ PFAT_DRIVER_IMPL drv, _In_ HANDLE handle) {
     if ((hdl->flags & HANDLE_FLAG_OPEN)) {
         if ((hdl->flags & HANDLE_FLAG_QUERY) != 0) {
             VirtualFree(hdl->query->dir_cache, 0, MEM_RELEASE);
-            memset(hdl->query, 0, ((size_t)hdl->query->recursion_limit + 3) << 2);
-            HeapFree(proc_heap, 0, hdl->query);
+            VirtualFree(hdl->query, 0, MEM_RELEASE);
         }
         else {
             deletePath(hdl->path);
@@ -1319,12 +1496,12 @@ NTSTATUS fat32Write(_In_ PFAT_DRIVER_IMPL drv, _In_ HANDLE file, _In_opt_ size_t
     return STATUS_NOT_IMPLEMENTED;
 }
 
-NTSTATUS fat32GetInfo(_In_ PFAT_DRIVER_IMPL drv, _In_ HANDLE handle, _In_ FS_INFO_TYPE info, _Inout_updates_bytes_(data_size) PVOID query_data, _In_ DWORD data_size) {
-    if ((drv == 0) || (handle == 0) || (handle == INVALID_HANDLE_VALUE) || (info >= FSInfoMax) || (query_data == 0) || (data_size == 0) || ((drv->flags & 0xff) != FAT_FLAG_VALID) || ((drv->flags & FAT_MASK_FAT) != FAT_FLAG_FAT32) || ((size_t)handle >= FAT_MAX_HANDLES)) {
+NTSTATUS fat32GetInfo(_In_ PFAT_DRIVER_IMPL drv, _In_ HANDLE handle, _In_ FS_INFO_TYPE info, _Inout_updates_bytes_opt_(data_size) PVOID query_data, _In_opt_ DWORD data_size) {
+    if ((drv == 0) || (handle == 0) || (handle == INVALID_HANDLE_VALUE) || (info >= FSInfoMax) || ((query_data == 0) && (data_size != 0)) || ((query_data != 0) && (data_size == 0)) || ((drv->flags & 0xff) != FAT_FLAG_VALID) || ((drv->flags & FAT_MASK_FAT) != FAT_FLAG_FAT32) || ((size_t)handle >= FAT_MAX_HANDLES)) {
         return STATUS_INVALID_PARAMETER;
     }
     PFAT_HANDLE hdl = &(drv->handle_table[(size_t)handle]);
-    if (((hdl->flags & HANDLE_FLAG_OPEN) == 0) || ((hdl->flags & HANDLE_FLAG_QUERY) != 0)) {
+    if ((hdl->flags & HANDLE_FLAG_OPEN) == 0) {
         return STATUS_INVALID_HANDLE;
     }
     if (info == FSName) {
@@ -1335,76 +1512,20 @@ NTSTATUS fat32GetInfo(_In_ PFAT_DRIVER_IMPL drv, _In_ HANDLE handle, _In_ FS_INF
         }
         PFAT_DIR83 ents = 0;
         size_t len = 0;
-        NTSTATUS status = readFat32Data(drv, hdl->parent_dir_start_cluster, &ents, &len);
-        if (status != 0) {
-            return status;
-        }
-        PWSTR lfn = HeapAlloc(proc_heap, 0, 512);
-        if (lfn == 0) {
-            errPrintf("HeapAlloc failed:%x\n\r", GetLastError());
-            status = STATUS_INTERNAL_ERROR;
-            goto _exit1_get_name;
-        }
-        memset(lfn, 0, 512);
-        status = getLongName((PFAT_DIR_LONG)ents, hdl->dir_ent_index, lfn);
-        if (status != 0) {
-            goto _exit_get_name;
-        }
-
-        size_t l = wcsnlen(lfn, 256);
-        if (l > name->long_name_max_length) {
-            status = STATUS_BUFFER_TOO_SMALL;
-            name->long_name_length = (uint32_t)l;
-            goto _exit_get_name;
-        }
-
-        size_t base_len = 8;
-        size_t i = 8;
-        while(i != 0) {
-            --i;
-            if (ents[hdl->dir_ent_index].filename[i] != ' ') {
-                break;
-            }
-            --base_len;
-        }
-        size_t ext_len;
-        if (ents[hdl->dir_ent_index].extension[2] != ' ') {
-            ext_len = 4;
-        }
-        else if (ents[hdl->dir_ent_index].extension[1] != ' ') {
-            ext_len = 3;
-        }
-        else if (ents[hdl->dir_ent_index].extension[0] != ' ') {
-            ext_len = 2;
+        NTSTATUS status = 0;
+        BOOL query = (hdl->flags & HANDLE_FLAG_QUERY) != 0;
+        if (query) {
+            ents = hdl->query->dir_cache;
         }
         else {
-            ext_len = 0;
+            status = readFat32Data(drv, hdl->parent_dir_start_cluster, &ents, &len);
+            if (status != 0) {
+                return status;
+            }
         }
-
-        size_t fl = base_len + ext_len;
-        name->name_8_3_length = (uint32_t)fl+1;
-
-        if (fl >= name->name_8_3_max_length) {
-            status = STATUS_BUFFER_TOO_SMALL;
-            goto _exit_get_name;
-        }
-        memcpy(name->name_8_3, &(ents[hdl->dir_ent_index].filename), base_len);
-
-        if (ext_len != 0) {
-            name->name_8_3[base_len] = '.';
-            memcpy(&(name->name_8_3[base_len + 1]), &(ents[hdl->dir_ent_index].extension), ext_len - 1);
-        }
-        name->name_8_3[fl] = 0;
-
-        name->long_name_length = (uint32_t)l;
-        memcpy(name->long_name, lfn, l << 1);
-
-        status = STATUS_SUCCESS;
-
-    _exit_get_name:
-       HeapFree(proc_heap, 0, lfn);
-    _exit1_get_name:
-        VirtualFree(ents, 0, MEM_RELEASE);
+        status = getName(ents, hdl->dir_ent_index, name, FALSE, FALSE);
+        if(!query)
+            VirtualFree(ents, 0, MEM_RELEASE);
         return status;
     }
     else if (info == FSSize) {
@@ -1432,132 +1553,451 @@ NTSTATUS fat32GetInfo(_In_ PFAT_DRIVER_IMPL drv, _In_ HANDLE handle, _In_ FS_INF
 
         PFAT_DIR83 dir = 0;
         size_t len;
-        NTSTATUS status = readFat32Data(drv, hdl->parent_dir_start_cluster, &dir, &len);
-        if (status != 0) {
-            return status;
-        }
-        if (hdl->dir_ent_index >= (len >> 5)) {
-            status = STATUS_INVALID_PARAMETER;
+        NTSTATUS status = 0;
+        BOOL query = (hdl->flags & HANDLE_FLAG_QUERY) != 0;
+        if (query) {
+            dir = hdl->query->dir_cache;
         }
         else {
-            status = 0;
-            UINT32 attrib = (UINT32)(dir[hdl->dir_ent_index].attribute);
-            UINT32 attr = 0;
-            if ((attrib & FAT_ATTRIB_READ_ONLY)) {
-                attr |= FS_ATTRIBUTE_READ_ONLY;
+            status = readFat32Data(drv, hdl->parent_dir_start_cluster, &dir, &len);
+            if (status != 0) {
+                return status;
             }
-            if ((attrib & FAT_ATTRIB_HIDDEN)) {
-                attr |= FS_ATTRIBUTE_HIDDEN;
-            }
-            if ((attrib & FAT_ATTRIB_SYSTEM)) {
-                attr |= FS_ATTRIBUTE_SYSTEM;
-            }
-            if ((attrib & FAT_ATTRIB_ARCHIVE)) {
-                attr |= FS_ATTRIBUTE_ARCHIVE;
-            }
-            if ((attrib & FAT_ATTRIB_DIRECTORY)) {
-                attr |= FS_ATTRIBUTE_DIR;
-            }
-            *((PFS_ATTRIBUTE_INFO)query_data) = attr;
         }
-        VirtualFree(dir, 0, MEM_RELEASE);
+        status = 0;
+        UINT32 attrib = (UINT32)(dir[hdl->dir_ent_index].attribute);
+        UINT32 attr = 0;
+        if ((attrib & FAT_ATTRIB_READ_ONLY)) {
+            attr |= FS_ATTRIBUTE_READ_ONLY;
+        }
+        if ((attrib & FAT_ATTRIB_HIDDEN)) {
+            attr |= FS_ATTRIBUTE_HIDDEN;
+        }
+        if ((attrib & FAT_ATTRIB_SYSTEM)) {
+            attr |= FS_ATTRIBUTE_SYSTEM;
+        }
+        if ((attrib & FAT_ATTRIB_ARCHIVE)) {
+            attr |= FS_ATTRIBUTE_ARCHIVE;
+        }
+        if ((attrib & FAT_ATTRIB_DIRECTORY)) {
+            attr |= FS_ATTRIBUTE_DIR;
+        }
+        *((PFS_ATTRIBUTE_INFO)query_data) = attr;
+        if(!query)
+            VirtualFree(dir, 0, MEM_RELEASE);
         return status;
     }
     else if (info == FSDateInfo) {
         if (data_size < sizeof(FS_DATE_INFO)) return STATUS_INVALID_PARAMETER;
         PFAT_DIR83 dir = 0;
         size_t len;
-        NTSTATUS status = readFat32Data(drv, hdl->parent_dir_start_cluster, &dir, &len);
-        if (status != 0) {
-            return status;
-        }
-        if (hdl->dir_ent_index >= (len >> 5)) {
-            status = STATUS_INVALID_PARAMETER;
+        NTSTATUS status = 0;
+        BOOL query = (hdl->flags & HANDLE_FLAG_QUERY) != 0;
+        if (query) {
+            dir = hdl->query->dir_cache;
         }
         else {
-            PFS_DATE_INFO date = (PFS_DATE_INFO)query_data;
-            status = 0;
-            SYSTEMTIME systime = { 0 };
-            FILETIME creation;
-            FILETIME modified;
-            FILETIME accessed;
-            PFAT_DIR83 dt = &(dir[hdl->dir_ent_index]);
-
-            systime.wMilliseconds = ((WORD)(dt->creation_seconds) % 100) * 10;
-            systime.wSecond = ((WORD)(dt->creation_seconds) / 100) + (((dt->creation_time) & 0x1F) << 1);
-            systime.wMinute = ((dt->creation_time) & 0x7E0) >> 5;
-            systime.wHour = ((dt->creation_time) & 0xF800) >> 11;
-            systime.wDayOfWeek = 0; // not needed
-            systime.wDay = ((dt->creation_date) & 0x1F);
-            systime.wMonth = (((dt->creation_date) & 0x1E0) >> 5);
-            systime.wYear = (((dt->creation_date) & 0xFE00) >> 9) + 1980;
-            if (!SystemTimeToFileTime(&systime, &creation)) {
-                errPrintf("error converting creation date:%x\n\r", GetLastError());
-                status = STATUS_INTERNAL_ERROR;
-                goto _date_info_exit;
+            status = readFat32Data(drv, hdl->parent_dir_start_cluster, &dir, &len);
+            if (status != 0) {
+                return status;
             }
-
-            systime.wMilliseconds = 0;
-            systime.wSecond = ((dt->last_mod_time) & 0x1F) << 1;
-            systime.wMinute = ((dt->last_mod_time) & 0x7E0) >> 5;
-            systime.wHour = ((dt->last_mod_time) & 0xF800) >> 11;
-            systime.wDayOfWeek = 0; // not needed
-            systime.wDay = ((dt->last_mod_date) & 0x1F);
-            systime.wMonth = (((dt->last_mod_date) & 0x1E0) >> 5);
-            systime.wYear = (((dt->last_mod_date) & 0xFE00) >> 9) + 1980;
-            if (!SystemTimeToFileTime(&systime, &modified)) {
-                errPrintf("error converting modified date:%x\n\r", GetLastError());
-                status = STATUS_INTERNAL_ERROR;
-                goto _date_info_exit;
-            }
-
-            systime.wMilliseconds = 0;
-            systime.wSecond = 0;
-            systime.wMinute = 0;
-            systime.wHour = 0;
-            systime.wDayOfWeek = 0; // not needed
-            systime.wDay = ((dt->last_accessed_date) & 0x1F);
-            systime.wMonth = (((dt->last_accessed_date) & 0x1E0) >> 5);
-            systime.wYear = (((dt->last_accessed_date) & 0xFE00) >> 9) + 1980;
-            if (!SystemTimeToFileTime(&systime, &accessed)) {
-                errPrintf("error converting modified date:%x\n\r", GetLastError());
-                status = STATUS_INTERNAL_ERROR;
-                goto _date_info_exit;
-            }
-
-            date->creation = creation;
-            date->last_modified = modified;
-            date->last_accessed = accessed;
         }
-    _date_info_exit:
-        VirtualFree(dir, 0, MEM_RELEASE);
+        PFS_DATE_INFO date = (PFS_DATE_INFO)query_data;
+        PFAT_DIR83 dt = &(dir[hdl->dir_ent_index]);
+        if (!getDate(dt, date)) {
+            status = STATUS_INTERNAL_ERROR;
+        }
+        if(!query)
+            VirtualFree(dir, 0, MEM_RELEASE);
+        return status;
+    }
+    else if (info == FSGetPath) {
+        if (data_size < sizeof(FS_GET_PATH_INFO)) return STATUS_INVALID_PARAMETER;
+        PFS_GET_PATH_INFO info = (PFS_GET_PATH_INFO)query_data;
+        PWSTR buf = VirtualAlloc(0, (size_t)(info->max_length) << 2, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        size_t pos = (size_t)(info->max_length);
+        if (buf == 0) {
+            errPrintf("VirtualAlloc failed:%x\n\r", GetLastError());
+            return STATUS_INTERNAL_ERROR;
+        }
+        PWSTR ret = HeapAlloc(proc_heap, 0, 0x200);
+        if (ret == 0) {
+            errPrintf("HeapAlloc failed:%x\n\r", GetLastError());
+            VirtualFree(buf, 0, MEM_RELEASE);
+            return STATUS_INTERNAL_ERROR;
+        }
+        memset(ret, 0, 0x200);
+        NTSTATUS status = 0;
+        BOOL is83 = info->flags & FS_PATH_83;
+        FS_NAME_INFO name = { 0 };
+        name.long_name = ret;
+        name.name_8_3 = (PSTR)ret;
+        name.long_name_max_length = 0x100;
+        name.name_8_3_max_length = 0x200;
+        size_t parent_cluster = 0;
+        if ((hdl->flags & HANDLE_FLAG_QUERY) != 0) {
+            PFAT_DIR83 dirs = hdl->query->dir_cache;
+
+            status = getName(dirs, hdl->dir_ent_index, &name, is83, !is83);
+            if (status != 0) {
+                goto _get_path_exit;
+            }
+            if (is83) {
+                if (pos <= name.name_8_3_length) {
+                    status = STATUS_BUFFER_TOO_SMALL;
+                    goto _get_path_exit;
+                }
+                pos -= name.name_8_3_length;
+                for (size_t i = 0; i < name.name_8_3_length; i++) {
+                    buf[pos + i] = (WCHAR)(((PSTR)buf)[i]);
+                }
+            }
+            else {
+                if (pos <= name.long_name_length) {
+                    status = STATUS_BUFFER_TOO_SMALL;
+                    goto _get_path_exit;
+                }
+                pos -= name.long_name_length;
+                memcpy(&(buf[pos]), ret, (size_t)(name.long_name_length) << 1);
+            }
+            --pos;
+            buf[pos] = L'/';
+
+            size_t cluster = 0;
+            if (strncmp(&(dirs[1].filename[0]), "..         ", 11) == 0) {
+                cluster = (((size_t)dirs[1].cluster_high) << 16) | ((size_t)dirs[1].cluster_low);
+                if (cluster == 0) {
+                    cluster = drv->params.root_cluster;
+                }
+            }
+
+            UINT32 ind = hdl->depth;
+            while (ind != 0) {
+                --ind;
+                size_t len = 0;
+                if (cluster == 0) {
+                    status = STATUS_DISK_CORRUPT_ERROR;
+                    goto _get_path_exit;
+                }
+                status = readFat32Data(drv, cluster, &dirs, &len);
+                if (status != 0) {
+                    goto _get_path_exit;
+                }
+                
+                status = getName(dirs, hdl->query->indices[ind], &name, is83, !is83);
+                if (status != 0) {
+                    goto _get_path_exit;
+                }
+                if (is83) {
+                    if (pos <= name.name_8_3_length) {
+                        status = STATUS_BUFFER_TOO_SMALL;
+                        goto _get_path_exit;
+                    }
+                    pos -= name.name_8_3_length;
+                    for (size_t i = 0; i < name.name_8_3_length; i++) {
+                        buf[pos + i] = (WCHAR)(((PSTR)buf)[i]);
+                    }
+                }
+                else {
+                    if (pos <= name.long_name_length) {
+                        status = STATUS_BUFFER_TOO_SMALL;
+                        goto _get_path_exit;
+                    }
+                    pos -= name.long_name_length;
+                    memcpy(&(buf[pos]), ret, (size_t)(name.long_name_length) << 1);
+                }
+                --pos;
+                buf[pos] = L'/';
+
+                parent_cluster = cluster;
+                cluster = (((size_t)dirs[1].cluster_high) << 16) | ((size_t)dirs[1].cluster_low);
+                if (cluster == 0) {
+                    cluster = drv->params.root_cluster;
+                }
+                VirtualFree(dirs, 0, MEM_RELEASE);
+
+            }
+
+            if ((info->flags & FS_PATH_QUERY_RELATIVE) != 0) {
+                if (pos > 0) {
+                    --pos;
+                    buf[pos] = L'.';
+                }
+                else {
+                    status = STATUS_BUFFER_TOO_SMALL;
+                    goto _get_path_exit;
+                }
+            }
+            else {
+                goto _query_path_entry;
+            }
+        }
+        else {
+            parent_cluster = hdl->cluster_index;
+            PFAT_DIR83 dirs = 0;
+            size_t len = 0;
+        _query_path_entry:
+            if (parent_cluster == 0) {
+                goto _copy_path;
+            }
+            status = readFat32Data(drv, parent_cluster, &dirs, &len);
+            if (status != 0) {
+                goto _get_path_exit;
+            }
+            size_t cluster = 0;
+            while (1) {
+                if (strncmp(&(dirs[1].filename[0]), "..         ", 11) != 0) {
+                    break;
+                }
+                cluster = (((size_t)dirs[1].cluster_high) << 16) | ((size_t)dirs[1].cluster_low);
+                VirtualFree(dirs, 0, MEM_RELEASE);
+                status = readFat32Data(drv, cluster, &dirs, &len);
+                if (status != 0) {
+                    goto _get_path_exit;
+                }
+                len >>= 3;
+                size_t i = 0;
+                size_t tmpc = 0;
+                BOOL found = FALSE;
+                while (i < len) {
+
+                    if ((dirs[i].attribute != 0xF) && (dirs[i].filename[0] != 0xE5) && ((dirs[i].attribute & FAT_ATTRIB_DIRECTORY) != 0)) {
+                        tmpc = (((size_t)dirs[i].cluster_high) << 16) | ((size_t)dirs[i].cluster_low);
+                        if (tmpc == parent_cluster) {
+                            found = TRUE;
+                            break;
+                        }
+                    }
+                    ++i;
+                }
+                if (found) {
+                    status = getName(dirs, i, &name, is83, !is83);
+                    if (status != 0) {
+                        goto _get_path_exit;
+                    }
+                    if (is83) {
+                        if (pos <= name.name_8_3_length) {
+                            status = STATUS_BUFFER_TOO_SMALL;
+                            goto _get_path_exit;
+                        }
+                        pos -= name.name_8_3_length;
+                        for (size_t i = 0; i < name.name_8_3_length; i++) {
+                            buf[pos + i] = (WCHAR)(((PSTR)buf)[i]);
+                        }
+                    }
+                    else {
+                        if (pos <= name.long_name_length) {
+                            status = STATUS_BUFFER_TOO_SMALL;
+                            goto _get_path_exit;
+                        }
+                        pos -= name.long_name_length;
+                        memcpy(&(buf[pos]), ret, (size_t)(name.long_name_length) << 1);
+                    }
+                    --pos;
+                    buf[pos] = L'/';
+                }
+                else {
+                    status = STATUS_DISK_CORRUPT_ERROR;
+                    goto _get_path_exit;
+                }
+                parent_cluster = cluster;
+            }
+
+        }
+    _copy_path:
+        memcpy(info->path, &(buf[pos]), ((size_t)info->max_length - pos) << 1);
+    _get_path_exit:
+        memset(ret, 0, 0x200);
+        HeapFree(proc_heap, 0, ret);
+        VirtualFree(buf, 0, MEM_RELEASE);
+
         return status;
     }
     else if (info == FSGetFirst) {
         if (data_size < sizeof(FS_GET_FIRST_INFO)) return STATUS_INVALID_PARAMETER;
         PFS_GET_FIRST_INFO info = (PFS_GET_FIRST_INFO)query_data;
-        HANDLE handle = info->h_query;
+        if ((info->h_query != 0) && (info->h_query != INVALID_HANDLE_VALUE)) {
+            return STATUS_INVALID_PARAMETER;
+        }
         if ((handle == 0) || (handle == INVALID_HANDLE_VALUE)) {
             return STATUS_INVALID_HANDLE;
         }
-        PFAT_HANDLE hdl = &(drv->handle_table[(size_t)handle]);
-        if (((hdl->flags & HANDLE_FLAG_OPEN) == 0) || ((hdl->flags & HANDLE_FLAG_DIR) == 0) || ((hdl->flags & HANDLE_FLAG_QUERY) != 0)) {
+
+        if (((hdl->flags & HANDLE_FLAG_DIR) == 0) || ((hdl->flags & HANDLE_FLAG_QUERY) != 0)) {
             return STATUS_INVALID_HANDLE;
         }
 
-        PFAT_DIR83 dirs;
+        PFAT_DIR83 dirs = 0;
         size_t len;
         NTSTATUS status = readFat32Data(drv, hdl->cluster_index, &dirs, &len);
         if (status < 0) {
             return status;
         }
 
-        
+        UINT32 recursion_limit;
+        if (!(info->recursive)) {
+            recursion_limit = 1;
+        }
+        else if ((info->recursion_limit == 0) || (info->recursion_limit > 0xFFFC)) {
+            recursion_limit = 0xFFFC;
+        }
+        else {
+            recursion_limit = info->recursion_limit;
+        }
 
-        return STATUS_NOT_IMPLEMENTED;
+        PFAT_QUERY_DATA query = VirtualAlloc(0, ((size_t)recursion_limit << 2) + 16, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        if (query == 0) {
+            errPrintf("VirtualAlloc failed:%x\n\r", GetLastError());
+            VirtualFree(dirs, 0, MEM_RELEASE);
+            return STATUS_INTERNAL_ERROR;
+        }
+        query->dir_len = (UINT32)(len >> 5);
+        size_t tmp = getNextImpl(dirs, 0, len >> 5);
+        DWORD qhdli = allocateHandle(drv);
+        if ((tmp == 0xFFFFFFFFFFFFFFFF) || (status = STATUS_INTERNAL_ERROR, qhdli == 0xFFFFFFFF)) {
+            info->h_query = INVALID_HANDLE_VALUE;
+            VirtualFree(dirs, 0, MEM_RELEASE);
+            VirtualFree(query, 0, MEM_RELEASE);
+            return status;
+        }
+        PFAT_HANDLE qhdl = &(drv->handle_table[qhdli]);
+
+        query->dir_cache = dirs;
+        query->recursion_limit = recursion_limit;
+
+        qhdl->query = query;
+        qhdl->flags = HANDLE_FLAG_QUERY | HANDLE_FLAG_OPEN;
+        if (info->recursive) {
+            qhdl->flags |= HANDLE_FLAG_QUERY_RECURSIVE;
+        }
+        if ((dirs[tmp].attribute & FAT_ATTRIB_DIRECTORY) != 0) {
+            qhdl->flags |= HANDLE_FLAG_DIR;
+        }
+        qhdl->parent_dir_start_cluster = hdl->cluster_index;
+        qhdl->cluster_index = (((UINT32)(dirs[tmp].cluster_high)) << 16) | ((UINT32)(dirs[tmp].cluster_low));
+        qhdl->dir_ent_index = (UINT32)tmp;
+        qhdl->depth = 0;
+        qhdl->size = dirs[tmp].filesize;
+
+        info->h_query = (HANDLE)(size_t)qhdli;
+        info->recursion_limit = recursion_limit;
+
+        return STATUS_SUCCESS;
     }
     else if (info == FSGetNext) {
-        if (data_size < sizeof(HANDLE)) return STATUS_INVALID_PARAMETER;
+        if ((hdl->flags & HANDLE_FLAG_QUERY) == 0) {
+            return STATUS_INVALID_HANDLE;
+        }
+        if (((hdl->flags & HANDLE_FLAG_QUERY_RECURSIVE) != 0)) {
+            if (((hdl->flags & HANDLE_FLAG_DIR) != 0) && (hdl->query->recursion_limit > hdl->depth) && ((hdl->dir_ent_index > 2) || ((strncmp(&(hdl->query->dir_cache[hdl->dir_ent_index].filename[0]), ".          ", 11) != 0) && (strncmp(&(hdl->query->dir_cache[hdl->dir_ent_index].filename[0]), "..         ", 11) != 0)))) {
+                // step into subdir:
+
+                PFAT_DIR83 ndirs = 0;
+                size_t len = 0;
+                NTSTATUS status = readFat32Data(drv, hdl->cluster_index, &ndirs, &len);
+                if (status != 0) {
+                    return status;
+                }
+                len >>= 5;
+                size_t tmp = getNextImpl(ndirs, 0, len);
+                if (tmp == 0xFFFFFFFFFFFFFFFF) {
+                    VirtualFree(ndirs, 0, MEM_RELEASE);
+                    goto _get_next_rec;
+                }
+                VirtualFree(hdl->query->dir_cache, 0, MEM_RELEASE);
+                hdl->query->dir_cache = ndirs;
+                hdl->query->dir_len = (UINT32)len;
+                hdl->query->indices[hdl->depth] = hdl->dir_ent_index;
+                ++(hdl->depth);
+                hdl->dir_ent_index = 0;
+                hdl->parent_dir_start_cluster = hdl->cluster_index;
+                hdl->cluster_index = (((UINT32)(ndirs[0].cluster_high)) << 16) | ((UINT32)(ndirs[0].cluster_low));
+            }
+            else {
+                PFAT_DIR83 dirs = 0;
+            _get_next_rec:
+                dirs = hdl->query->dir_cache;
+                size_t tmp = getNextImpl(dirs, (size_t)hdl->dir_ent_index + 1, hdl->query->dir_len);
+                if (tmp == 0xFFFFFFFFFFFFFFFF) {
+                    size_t ndirlen = 0;
+                    UINT32 parent = 0;
+                    do {
+                        if (hdl->depth > 0) {
+                            if (strncmp(&(dirs[1].filename[0]), "..         ", 11) == 0) {
+                                parent = ((UINT32)(dirs[1].cluster_high) << 16) | (UINT32)(dirs[1].cluster_low);
+                                if (parent == 0)
+                                    parent = drv->params.root_cluster;
+                                PFAT_DIR83 ndir = 0;
+                                size_t len = 0;
+                                NTSTATUS status = readFat32Data(drv, (size_t)parent, &ndir, &len);
+                                if (status != 0) {
+                                    return status;
+                                }
+                                VirtualFree(dirs, 0, MEM_RELEASE);
+                                dirs = ndir;
+                                ndirlen = len >> 5;
+                                --(hdl->depth);
+                                tmp = getNextImpl(dirs, (size_t)hdl->query->indices[hdl->depth] + 1, ndirlen);
+                            }
+                            else {
+                                return STATUS_DISK_CORRUPT_ERROR;
+                            }
+                        }
+                        else {
+                            return STATUS_SUCCESS;
+                        }
+                    } while (tmp == 0xFFFFFFFFFFFFFFFF);
+                    hdl->dir_ent_index = (UINT32)tmp;
+                    if ((dirs[tmp].attribute & FAT_ATTRIB_DIRECTORY) != 0) {
+                        hdl->flags |= HANDLE_FLAG_DIR;
+                    }
+                    else {
+                        hdl->flags &= ~HANDLE_FLAG_DIR;
+                    }
+                    hdl->cluster_index = (((UINT32)(dirs[tmp].cluster_high)) << 16) | ((UINT32)(dirs[tmp].cluster_low));
+                    if (hdl->cluster_index == 0) {
+                        hdl->cluster_index = drv->params.root_cluster;
+                    }
+                    hdl->parent_dir_start_cluster = parent;
+                    hdl->dir_ent_index = (UINT32)tmp;
+                    hdl->query->dir_cache = dirs;
+                    hdl->query->dir_len = (UINT32)ndirlen;
+                    hdl->size = dirs[tmp].filesize;
+                }
+                else {
+                    hdl->dir_ent_index = (UINT32)tmp;
+                    if ((dirs[tmp].attribute & FAT_ATTRIB_DIRECTORY) != 0) {
+                        hdl->flags |= HANDLE_FLAG_DIR;
+                    }
+                    else {
+                        hdl->flags &= ~HANDLE_FLAG_DIR;
+                    }
+                    hdl->cluster_index = (((UINT32)(dirs[tmp].cluster_high)) << 16) | ((UINT32)(dirs[tmp].cluster_low));
+                    hdl->dir_ent_index = (UINT32)tmp;
+                    hdl->size = dirs[tmp].filesize;
+                }
+            }
+        }
+        else {
+            PFAT_DIR83 dirs = hdl->query->dir_cache;
+            size_t tmp = getNextImpl(dirs, (size_t)hdl->dir_ent_index + 1, hdl->query->dir_len);
+            if (tmp == 0xFFFFFFFFFFFFFFFF) {
+                return STATUS_SUCCESS;
+            }
+            hdl->dir_ent_index = (UINT32)tmp;
+            if ((dirs[tmp].attribute & FAT_ATTRIB_DIRECTORY) != 0) {
+                hdl->flags |= HANDLE_FLAG_DIR;
+            }
+            else {
+                hdl->flags &= ~HANDLE_FLAG_DIR;
+            }
+            hdl->cluster_index = (((UINT32)(dirs[tmp].cluster_high)) << 16) | ((UINT32)(dirs[tmp].cluster_low));
+            hdl->dir_ent_index = (UINT32)tmp;
+            hdl->size = dirs[tmp].filesize;
+        }
+        return STATUS_MORE_ENTRIES; // normal return if end not reached
+    }
+    else if (info == FSGetPhys) {
 
         // TODO
 

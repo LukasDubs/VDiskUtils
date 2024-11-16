@@ -24,6 +24,7 @@ typedef struct _FAT_CONST_PARAMS {
 
 typedef struct _FAT_QUERY_DATA {
     PFAT_DIR83 dir_cache;
+    UINT32 dir_len;
     UINT32 recursion_limit;
     UINT32 indices[ANYSIZE_ARRAY];
 } FAT_QUERY_DATA, * PFAT_QUERY_DATA;
@@ -81,7 +82,7 @@ NTSTATUS fat12Create(_In_ PFAT_DRIVER_IMPL drv, _In_ LPCWSTR path, _In_opt_ HAND
 NTSTATUS fat12Delete(_In_ PFAT_DRIVER_IMPL drv, _In_ HANDLE file);
 NTSTATUS fat12Read(_In_ PFAT_DRIVER_IMPL drv, _In_ HANDLE file, _In_opt_ size_t offset, _In_ size_t length, _In_reads_bytes_(length) void* buffer);
 NTSTATUS fat12Write(_In_ PFAT_DRIVER_IMPL drv, _In_ HANDLE file, _In_opt_ size_t offset, _In_ size_t length, _Out_writes_bytes_(length) void* buffer);
-NTSTATUS fat12GetInfo(_In_ PFAT_DRIVER_IMPL drv, _In_ HANDLE handle, _In_ FS_INFO_TYPE info, _Inout_updates_bytes_(data_size) PVOID query_data, _In_ DWORD data_size);
+NTSTATUS fat12GetInfo(_In_ PFAT_DRIVER_IMPL drv, _In_ HANDLE handle, _In_ FS_INFO_TYPE info, _Inout_updates_bytes_opt_(data_size) PVOID query_data, _In_opt_ DWORD data_size);
 NTSTATUS fat12SetInfo(_In_ PFAT_DRIVER_IMPL drv, _In_ HANDLE handle, _In_ FS_INFO_TYPE info, _In_reads_bytes_(data_size) PVOID query_data, _In_ DWORD data_size);
 
 NTSTATUS fat16Open(_In_ PFAT_DRIVER_IMPL drv, _In_ LPCWSTR path, _In_opt_ HANDLE current_path, _Out_ PHANDLE handle);
@@ -90,7 +91,7 @@ NTSTATUS fat16Create(_In_ PFAT_DRIVER_IMPL drv, _In_ LPCWSTR path, _In_opt_ HAND
 NTSTATUS fat16Delete(_In_ PFAT_DRIVER_IMPL drv, _In_ HANDLE file);
 NTSTATUS fat16Read(_In_ PFAT_DRIVER_IMPL drv, _In_ HANDLE file, _In_opt_ size_t offset, _In_ size_t length, _In_reads_bytes_(length) void* buffer);
 NTSTATUS fat16Write(_In_ PFAT_DRIVER_IMPL drv, _In_ HANDLE file, _In_opt_ size_t offset, _In_ size_t length, _Out_writes_bytes_(length) void* buffer);
-NTSTATUS fat16GetInfo(_In_ PFAT_DRIVER_IMPL drv, _In_ HANDLE handle, _In_ FS_INFO_TYPE info, _Inout_updates_bytes_(data_size) PVOID query_data, _In_ DWORD data_size);
+NTSTATUS fat16GetInfo(_In_ PFAT_DRIVER_IMPL drv, _In_ HANDLE handle, _In_ FS_INFO_TYPE info, _Inout_updates_bytes_opt_(data_size) PVOID query_data, _In_opt_ DWORD data_size);
 NTSTATUS fat16SetInfo(_In_ PFAT_DRIVER_IMPL drv, _In_ HANDLE handle, _In_ FS_INFO_TYPE info, _In_reads_bytes_(data_size) PVOID query_data, _In_ DWORD data_size);
 
 NTSTATUS fat32Open(_In_ PFAT_DRIVER_IMPL drv, _In_ LPCWSTR path, _In_opt_ HANDLE current_path, _Out_ PHANDLE handle);
@@ -99,5 +100,5 @@ NTSTATUS fat32Create(_In_ PFAT_DRIVER_IMPL drv, _In_ LPCWSTR path, _In_opt_ HAND
 NTSTATUS fat32Delete(_In_ PFAT_DRIVER_IMPL drv, _In_ HANDLE file);
 NTSTATUS fat32Read(_In_ PFAT_DRIVER_IMPL drv, _In_ HANDLE file, _In_opt_ size_t offset, _In_ size_t length, _In_reads_bytes_(length) void* buffer);
 NTSTATUS fat32Write(_In_ PFAT_DRIVER_IMPL drv, _In_ HANDLE file, _In_opt_ size_t offset, _In_ size_t length, _Out_writes_bytes_(length) void* buffer);
-NTSTATUS fat32GetInfo(_In_ PFAT_DRIVER_IMPL drv, _In_ HANDLE handle, _In_ FS_INFO_TYPE info, _Inout_updates_bytes_(data_size) PVOID query_data, _In_ DWORD data_size);
+NTSTATUS fat32GetInfo(_In_ PFAT_DRIVER_IMPL drv, _In_ HANDLE handle, _In_ FS_INFO_TYPE info, _Inout_updates_bytes_opt_(data_size) PVOID query_data, _In_opt_ DWORD data_size);
 NTSTATUS fat32SetInfo(_In_ PFAT_DRIVER_IMPL drv, _In_ HANDLE handle, _In_ FS_INFO_TYPE info, _In_reads_bytes_(data_size) PVOID query_data, _In_ DWORD data_size);

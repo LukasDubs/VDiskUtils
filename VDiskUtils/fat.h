@@ -199,7 +199,7 @@ ENDPACK
 #define INVALID_FAT_CHAR(c) ((((c) <= 0x20) && ((c) != 0x5)) /* Control chars are invalid except 0x05 as replacement for 0xE5 */ || \
 							((c) > 0xff) /* UTF-16 chars are invalid */ || \
 							((c) == 0x7C) /*pipe char is invalid*/ || \
-							((c) == 0x7F) /* DEl char is invalid */ || \
+							((c) == 0x7F) /* DEl char is invalid? (not sure but forbidden for safety) */ || \
 							(((c) < 0x60) && (((0x38000000FC00DC04 >> (((unsigned char)(c)) - 0x20)) & 1) != 0)) /* magic for all invalid characters between 0x20 and 0x60: 0x22, 0x2A, 0x2B, 0x2C, 0x2E, 0x2F, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F, 0x5B, 0x5C, 0x5D */ )
 
 BSTATUS createFATDriver(_In_ PVDISK vdisk, _In_opt_ UINT32 partition_index, _Out_ PFS_DRIVER* driver);

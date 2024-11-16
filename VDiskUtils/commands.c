@@ -328,7 +328,7 @@ int execCmd(LPWSTR* args, size_t argc) {
 			errPrintf("Invalid Command!\n\r");
 		}
 	}
-	else if(arg0l == 9) {
+	else if (arg0l == 9) {
 		if (wcscmp(arg0, L"attribute") == 0) {
 			if (wcscmp(args[1], L"get") == 0) {
 				//TODO
@@ -362,11 +362,70 @@ int execFsCmd(LPWSTR* args, size_t argc) {
 	size_t arg0l = prepStr(arg0);
 	if (arg0l == 2) {
 		if (wcsncmp(arg0, L"ls", 2) == 0) {
+			BOOL recursive = FALSE;
+			size_t rl = 0;
+			if (argc > 1) {
+				if (wcscmp(args[1], L"-r") == 0) {
+					recursive = TRUE;
+				}
+				else if (wcscmp(args[1], L"-rl") == 0) {
+					recursive = TRUE;
+					if (argc != 3) {
+						errPrintf("Invalid number of args!\n\r");
+					}
+					else {
+						if (!parseI(args[2], &rl)) {
+							errPrintf("Invalid recusrion limit!\n\r");
+							rl = 0;
+						}
+					}
+				}
+				else if(wcscmp(args[1], L"-h") == 0) {
+					exePrintf("ls:\n\r\t-r       \tquery dirs ans subdirs recursive\n\r\t-rl limit\tquery recursive with depth limit\n\r");
+				}
+				else {
+					errPrintf("ls -r|-rl\n\r");
+				}
+			}
 			if (current_dir == INVALID_HANDLE_VALUE) {
 				errPrintf("Invalid directory");
 			}
 			else {
-				errPrintf("Not Implemented!\n\r");
+				FS_GET_FIRST_INFO info = { 0 };
+				info.recursive = recursive;
+				info.recursion_limit = (UINT32)rl;
+				NTSTATUS status = driver->get_info(driver, current_dir, FSGetFirst, &info, sizeof(info));
+				if (status != 0) {
+					errPrintf("Error querying directory:%x\n\r", status);
+				}
+				else if (info.h_query == 0) {
+					errPrintf("Invalid Handle returned!\n\r");
+				}
+				else {
+					
+					FS_ATTRIBUTE_INFO attrib = 0;
+					FS_GET_PATH_INFO path = { 0 };
+					path.max_length = 0x10000;
+					path.path = VirtualAlloc(0, 0x20000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+					if (path.path == 0) {
+						errPrintf("VirtualAlloc failed:%x\n\r", GetLastError());
+					}
+					else {
+						do {
+							memset(path.path, 0, 0x20000);
+							status = driver->get_info(driver, info.h_query, FSGetPath, &path, sizeof(path));
+							if (status != 0) break;
+							status = driver->get_info(driver, info.h_query, FSAttribute, &attrib, sizeof(attrib));
+							if (status != 0) break;
+							exePrintf("\tattribute:0x%x\tpath:%ws\n\r", attrib, path.path);
+						} while ((status = driver->get_info(driver, info.h_query, FSGetNext, 0, 0)) == STATUS_MORE_ENTRIES);
+						if (status != 0) {
+							errPrintf("Error:%x\n\r", status);
+						}
+						driver->close(driver, info.h_query);
+						VirtualFree(path.path, 0, MEM_RELEASE);
+					}
+				}
 			}
 		}
 		else if (wcsncmp(arg0, L"cd", 2) == 0) {
