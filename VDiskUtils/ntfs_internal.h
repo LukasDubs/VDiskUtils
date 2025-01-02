@@ -4,10 +4,22 @@
 
 #define MAX_NTFS_HANDLES 0x200
 
-#define NTFS_HANDLE_OPEN 0x80000000
+#define NTFS_HANDLE_OPEN      0x8000
+#define NTFS_HANDLE_DIR       0x4000
+#define NTFS_HANDLE_QUERY     0x2000
+#define NTFS_HANDLE_RECURSIVE 0x1000
+
+typedef struct _NTFS_QUERY_INFO {
+	PUINT64 offset_buf;
+	PNTFS_INDEX_VALUE current_val;
+	PNTFS_INDEX_VALUE val;
+} NTFS_QUERY_INFO, * PNTFS_QUERY_INFO;
 
 typedef struct _NTFS_HANDLE {
-	UINT32 flags;
+	UINT16 flags;
+	UINT16 recusrion_limit;
+	UINT32 depth;
+	PNTFS_QUERY_INFO query_info;
 	NTFS_FILE_REF ref;
 	PNTFS_FILE_RECORD file_record;
 } NTFS_HANDLE, * PNTFS_HANDLE;

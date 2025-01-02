@@ -9,7 +9,8 @@ void static NTFSDriverExit(PNTFS_DRIVER drv) {
 }
 
 size_t static __inline allocHandle(PNTFS_DRIVER drv) {
-	for (size_t i = 0; i < MAX_NTFS_HANDLES; i++) {
+	// start loop at 1 since 0 can be interpreted as a invalid handle value
+	for (size_t i = 1; i < MAX_NTFS_HANDLES; i++) {
 		if ((drv->handle_table[i].flags & NTFS_HANDLE_OPEN) == 0) {
 			return i;
 		}
@@ -248,7 +249,7 @@ NTSTATUS static dataRunRead(_In_ PNTFS_DRIVER drv, _In_ PNTFS_DATA_RUNS runs, _O
 NTSTATUS static NTFSGetDirEntries(_In_ PNTFS_DRIVER drv, _In_ PNTFS_FILE_RECORD file, _Out_ PNTFS_INDEX_VALUE* vals, _Out_ PULONG64 length) {
 	NTSTATUS status;
 	PNTFS_STD_ATTRIB_HEADER attr = (PNTFS_STD_ATTRIB_HEADER)(((size_t)file) + file->attribs_offset);
-	PNTFS_INDEX_ROOT root = 0; // TODO: for multiple INDEX_ALLOCATION attributes and for $Bitmap attribute
+	PNTFS_INDEX_ROOT root = 0; // TODO: check for multiple INDEX_ALLOCATION attributes and for $Bitmap attribute
 	UINT8* dr = 0;
 
 	while (attr->id != NTFS_END_MARKER) {
@@ -436,6 +437,9 @@ NTSTATUS NTFSOpen(_In_ PNTFS_DRIVER drv, _In_ LPCWSTR path, _In_opt_ HANDLE curr
 	PNTFS_FILE_RECORD rec;
 	NTSTATUS status = NTFSGetFile(drv, tokens, n_toks, current_path, &ref, &rec);
 	if (status >= 0) {
+		if ((rec->flags & NTFS_FILE_RECORD_FLAG_IS_DIR) != 0) {
+			hdl->flags |= NTFS_HANDLE_DIR;
+		}
 		hdl->file_record = rec;
 		hdl->ref = ref;
 		*handle = (HANDLE)i;
@@ -453,9 +457,14 @@ NTSTATUS NTFSClose(_In_ PNTFS_DRIVER drv, _In_ HANDLE handle) {
 			if ((hdl->flags & NTFS_HANDLE_OPEN) != 0) {
 				hdl->flags = 0;
 				VirtualFree(hdl->file_record, 0, MEM_RELEASE);
-				hdl->file_record = 0;
-				hdl->ref.mft_index = 0;
-				hdl->ref.sequence_num = 0;
+
+				if ((hdl->flags & NTFS_HANDLE_QUERY) != 0) {
+					VirtualFree(hdl->query_info->val, 0, MEM_RELEASE);
+					VirtualFree(hdl->query_info->offset_buf, 0, MEM_RELEASE);
+					memset(hdl->query_info, 0, sizeof(NTFS_QUERY_INFO));
+					HeapFree(proc_heap, 0, hdl->query_info);
+				}
+				memset(hdl, 0, sizeof(NTFS_HANDLE));
 				return STATUS_SUCCESS;
 			}
 			else {
@@ -550,7 +559,7 @@ NTSTATUS NTFSGetInfo(_In_ PNTFS_DRIVER drv, _In_ HANDLE handle, _In_ FS_INFO_TYP
 		}
 
 		UINT32 attribs = 0;
-		if ((file->flags & NTFS_FILE_RECORD_FLAG_IS_DIR) != 0) {
+		if ((hdl->flags & NTFS_HANDLE_DIR) != 0) {
 			attribs |= FS_ATTRIBUTE_DIR;
 		}
 
@@ -590,7 +599,6 @@ NTSTATUS NTFSGetInfo(_In_ PNTFS_DRIVER drv, _In_ HANDLE handle, _In_ FS_INFO_TYP
 				dates->last_modified_u64 = std->altered_time;
 				dates->last_accessed_u64 = std->read_time;
 
-
 				return STATUS_SUCCESS;
 			}
 			attr = NTFS_NEXT_ATTRIB(attr);
@@ -598,13 +606,129 @@ NTSTATUS NTFSGetInfo(_In_ PNTFS_DRIVER drv, _In_ HANDLE handle, _In_ FS_INFO_TYP
 		return STATUS_NOT_FOUND;
 	}
 	else if (info == FSGetPath) {
+		if (data_size < sizeof(FS_GET_PATH_INFO)) {
+			return STATUS_INVALID_PARAMETER;
+		}
+		PFS_GET_PATH_INFO info = query_data;
+		if ((info->flags & FS_PATH_83) != 0) {
+			return STATUS_NOT_SUPPORTED;
+		}
+		UINT32 depth = 0;
+		if ((info->flags & FS_PATH_QUERY_RELATIVE) != 0) {
+			if ((hdl->flags & NTFS_HANDLE_QUERY) == 0) {
+				return STATUS_NOT_SUPPORTED;
+			}
+			depth = hdl->depth + 1;
+		}
 
+		PWCHAR buf = HeapAlloc(proc_heap, 0, (size_t)info->max_length << 1);
+		if (buf == 0) {
+			errPrintf("HeapAlloc failed:%x\n\r", GetLastError());
+			return STATUS_INTERNAL_ERROR;
+		}
+		PWCHAR temp = buf + info->max_length;
+
+		NTFS_FILE_REF ref = hdl->ref;
+		PNTFS_FILE_RECORD file;
+		NTSTATUS status;
+		do {
+			--depth;
+
+			status = readMFTEntry(drv, ref.mft_index, &file);
+			if (status < 0) {
+				HeapFree(proc_heap, 0, buf);
+				return status;
+			}
+
+			PNTFS_STD_ATTRIB_HEADER attr = (PNTFS_STD_ATTRIB_HEADER)(((size_t)file) + file->attribs_offset);
+			while (attr->id != NTFS_END_MARKER) {
+				if (attr->id == NTFS_FILE_NAME_ID) {
+					PNTFS_FILE_NAME fs_name = NTFS_RESIDENT_ATTR_DATA(attr);
+					ref = fs_name->parent_dir_file_ref;
+
+					UINT32 l = fs_name->n_chars;
+					
+					temp -= l + 1;
+					if ((size_t)temp < (size_t)buf) {
+						HeapFree(proc_heap, 0, buf);
+						return STATUS_BUFFER_TOO_SMALL;
+					}
+
+					memcpy(temp+1, (PVOID)(((size_t)fs_name) + sizeof(NTFS_FILE_NAME)), (size_t)l << 1);
+					*temp = L'/';
+					break;
+				}
+				attr = NTFS_NEXT_ATTRIB(attr);
+			}
+
+			VirtualFree(file, 0, MEM_RELEASE);
+
+		} while ((ref.mft_index != 0x5) && (depth != 0));
+
+		size_t len = (((size_t)info->max_length) << 1) + ((size_t)buf) - ((size_t)temp);
+		memcpy(info->path, temp, len);
+		HeapFree(proc_heap, 0, buf);
+		return STATUS_SUCCESS;
 	}
 	else if (info == FSGetFirst) {
+		if ((hdl->flags & NTFS_HANDLE_DIR) == 0) {
+			return STATUS_NOT_A_DIRECTORY;
+		}
+		if (data_size < sizeof(FS_GET_FIRST_INFO)) {
+			return STATUS_INVALID_PARAMETER;
+		}
+		PFS_GET_FIRST_INFO info = query_data;
+		size_t i = allocHandle(drv);
+		PNTFS_HANDLE qhdl = &(drv->handle_table[i]);
+		
+		qhdl->query_info = HeapAlloc(proc_heap, 0, sizeof(NTFS_QUERY_INFO));
+		if (qhdl->query_info == 0) {
+			errPrintf("HeapAlloc failed:%x\n\r", GetLastError());
+			qhdl->flags = 0;
+			return STATUS_INTERNAL_ERROR;
+		}
+
+		UINT16 rl = (info->recursion_limit - 1) > 0xFFFE ? 0xFFFF : info->recursion_limit;
+
+		qhdl->query_info->offset_buf = VirtualAlloc(0, rl * sizeof(UINT32), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+		if (qhdl->query_info->offset_buf == 0) {
+			memset(qhdl->query_info, 0, sizeof(NTFS_QUERY_INFO));
+			HeapFree(proc_heap, 0, qhdl->query_info);
+			qhdl->flags = 0;
+			return STATUS_INTERNAL_ERROR;
+		}
+		UINT64 len;
+		NTSTATUS status = NTFSGetDirEntries(drv, hdl->file_record, &qhdl->query_info->val, &len);
+		if (status < 0) {
+			VirtualFree(qhdl->query_info->offset_buf, 0, MEM_RELEASE);
+			memset(qhdl->query_info, 0, sizeof(NTFS_QUERY_INFO));
+			HeapFree(proc_heap, 0, qhdl->query_info);
+			qhdl->flags = 0;
+			return status;
+		}
+
+		status = readMFTEntry(drv, qhdl->query_info->val->file_ref.mft_index, &(qhdl->file_record));
+		if (status < 0) {
+			VirtualFree(qhdl->query_info->val, 0, MEM_RELEASE);
+			VirtualFree(qhdl->query_info->offset_buf, 0, MEM_RELEASE);
+			memset(qhdl->query_info, 0, sizeof(NTFS_QUERY_INFO));
+			HeapFree(proc_heap, 0, qhdl->query_info);
+			qhdl->flags = 0;
+			return status;
+		}
+
+		qhdl->flags |= NTFS_HANDLE_OPEN | NTFS_HANDLE_QUERY;
+		qhdl->recusrion_limit = rl;
+		qhdl->depth = 0;
+		qhdl->query_info->current_val = qhdl->query_info->val;
+
+		info->h_query = (HANDLE)i;
+
+		return STATUS_SUCCESS;
 
 	}
 	else if (info == FSGetNext) {
-
+		// TODO
 	}
 	else if (info == FSGetPhys) {
 
