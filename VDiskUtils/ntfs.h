@@ -36,10 +36,10 @@ typedef struct _NTFS_BOOT {
 	UINT8 sectors_per_cluster;
 	UINT8 unused1[7];
 	UINT8 media_desc;
-	UINT8 unused2[2];
+	UINT16 unused2;
 	UINT16 sectors_per_track;
 	UINT16 number_of_heads;
-	UINT8 unused3[8];
+	UINT64 unused3;
 	UINT32 signature;
 	UINT64 number_of_sectors;
 	UINT64 lcn_of_mft;
@@ -105,6 +105,11 @@ typedef struct _NTFS_FILE_RECORD {
 #define NTFS_LOGGED_UTILITY_STREAM_ID 0x100
 #endif
 #define NTFS_END_MARKER 0xFFFFFFFF
+
+typedef struct _NTFS_FILE_REF {
+	UINT64 mft_index : 48;
+	UINT64 sequence_num : 16;
+} NTFS_FILE_REF, * PNTFS_FILE_REF;
 
 #define NTFS_STD_ATTRIB_FLAG_COMPRESSED 0x0001
 #define NTFS_STD_ATTRIB_MASK_COMPRESSION 0x00ff
@@ -238,7 +243,7 @@ typedef struct _NTFS_ATTRIBUTE_LIST {
 #define NTFS_NAMESPACE_DOS_WINDOWS 3
 
 typedef struct _NTFS_FILE_NAME {
-	UINT64 parent_dir_file_ref;
+	NTFS_FILE_REF parent_dir_file_ref;
 	UINT64 creation_time;
 	UINT64 altered_time;
 	UINT64 mft_changed_time;
@@ -301,13 +306,59 @@ typedef struct _NTFS_VOLUME_INFORMATION {
 	UINT32 reserved1;
 } NTFS_VOLUME_INFORMATION, * PNTFS_VOLUME_INFORMATION;
 
-typedef struct _NTFS_INDEX_ROOT {
+#define NTFS_INDEX_COLLATION_BINARY 0x00
+#define NTFS_INDEX_COLLATION_FILENAME 0x01
+#define NTFS_INDEX_COLLATION_UNICODE_STRING 0x02
+#define NTFS_INDEX_COLLATION_NTOFS_ULONG 0x10
+#define NTFS_INDEX_COLLATION_NTOFS_SID 0x11
+#define NTFS_INDEX_COLLATION_NTOFS_SECURITY_HASH 0x12
+#define NTFS_INDEX_COLLATION_NTOFS_ULONGS 0x13
+
+typedef struct _NTFS_INDEX_ROOT_HEADER {
 	UINT32 type;
-	UINT32 collation_rule;
+	UINT32 collation_type;
 	UINT32 bytes_per_index_record;
-	//?
-	//TODO
+	UINT32 num_cluster_blocks;
+} NTFS_INDEX_ROOT_HEADER, * PNTFS_INDEX_ROOT_HEADER;
+
+#define NTFS_INDEX_NODE_FLAG_BRANCH 0x1
+
+typedef struct _NTFS_INDEX_NODE_HEADER {
+	UINT32 values_offset;
+	UINT32 node_size;
+	UINT32 alloc_size;
+	UINT32 flags;
+} NTFS_INDEX_NODE_HEADER, * PNTFS_INDEX_NODE_HEADER;
+
+#define NTFS_INDEX_ENTRY_SIGNATURE 'INDX'
+
+typedef struct _NTFS_INDEX_ENTRY_HEADER {
+	UINT32 signature;
+	UINT16 fix_up_offset;
+	UINT16 n_fix_ups;
+	UINT64 log_seq;
+	UINT64 ent_vcn;
+} NTFS_INDEX_ENTRY_HEADER, * PNTFS_INDEX_ENTRY_HEADER;
+
+typedef struct _NTFS_INDEX_ROOT {
+	NTFS_INDEX_ROOT_HEADER root;
+	NTFS_INDEX_NODE_HEADER node;
 } NTFS_INDEX_ROOT, * PNTFS_INDEX_ROOT;
+
+typedef struct _NTFS_INDEX_ENTRY {
+	NTFS_INDEX_ENTRY_HEADER header;
+	NTFS_INDEX_NODE_HEADER node;
+} NTFS_INDEX_ENTRY, * PNTFS_INDEX_ENTRY;
+
+#define NTFS_INDEX_VALUE_FLAGS_SUB_NODE 0x1
+#define NTFS_INDEX_VALUE_FLAGS_IS_LAST  0x2
+
+typedef struct _NTFS_INDEX_VALUE {
+	NTFS_FILE_REF file_ref;
+	UINT16 value_size; // size of the entire index value including the key
+	UINT16 keysize;
+	UINT32 value_flags;
+} NTFS_INDEX_VALUE, * PNTFS_INDEX_VALUE;
 
 #define NTFS_REPARSE_TYPE_IS_ALIAS 0x20000000
 #define NTFS_REPARSE_TYPE_IS_HIGH_LATENCY 0x40000000
@@ -348,4 +399,19 @@ typedef struct _NTFS_EA {
 	UINT16 value_length;
 } NTFS_EA, * PNTFS_EA;
 
+#define MTFS_MFT_ENT_MFT      0x0
+#define NTFS_MFT_ENT_MFT_MIRR 0x1
+#define NTFS_MFT_ENT_LOG_FILE 0x2
+#define NTFS_MFT_ENT_VOLUME   0x3
+#define NTFS_MFT_ENT_ATTR_DEF 0x4
+#define NTFS_MFT_ENT_ROOT_DIR 0x5
+#define NTFS_MFT_ENT_BITMAP   0x6
+#define NTFS_MFT_ENT_BOOT     0x7
+#define NTFS_MFT_ENT_BAD_CLUS 0x8
+#define NTFS_MFT_ENT_SECURE   0x9
+#define NTFS_MFT_ENT_UP_CASE  0xA
+#define NTFS_MFT_ENT_EXTEND   0xB
+
 ENDPACK
+
+BSTATUS createNTFSDriver(_In_ PVDISK vdisk, _In_opt_ UINT32 partition_index, _Out_ PFS_DRIVER* driver);

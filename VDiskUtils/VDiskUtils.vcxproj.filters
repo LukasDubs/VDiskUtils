@@ -42,6 +42,9 @@
     <ClCompile Include="fat.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="ntfs.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="formats.h">
@@ -75,6 +78,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="fat_internal.h">
+      <Filter>Header Files\internal</Filter>
+    </ClInclude>
+    <ClInclude Include="ntfs_internal.h">
       <Filter>Header Files\internal</Filter>
     </ClInclude>
   </ItemGroup>

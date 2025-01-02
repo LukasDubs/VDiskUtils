@@ -141,6 +141,7 @@
     <ClCompile Include="fat.c" />
     <ClCompile Include="gpt.c" />
     <ClCompile Include="mbr.c" />
+    <ClCompile Include="ntfs.c" />
     <ClCompile Include="utils.c" />
     <ClCompile Include="vdisk.c" />
     <ClCompile Include="vhd.c" />
@@ -153,6 +154,7 @@
     <ClInclude Include="gpt.h" />
     <ClInclude Include="mbr.h" />
     <ClInclude Include="ntfs.h" />
+    <ClInclude Include="ntfs_internal.h" />
     <ClInclude Include="utils.h" />
     <ClInclude Include="vdisk.h" />
     <ClInclude Include="vhd.h" />

@@ -2,10 +2,8 @@
 #include "console.h"
 #include "fat_internal.h"
 
-void static __inline deletePath(_In_ LPWSTR path);
-
 static BSTATUS computeFAT32FreeClusters(_In_ PFAT_DRIVER_IMPL drv) {
-
+    // TODO
 }
 
 void static fatDriverDelete(PFAT_DRIVER_IMPL driver) {
@@ -193,82 +191,8 @@ DWORD static __inline allocateHandle(_In_ PFAT_DRIVER_IMPL drv) {
     return 0xFFFFFFFF;
 }
 
-LPWSTR static __inline storePath(_In_ const LPCWSTR str) {
-    size_t len = (wcslen(str) + 1) << 1;
-    LPWSTR out = HeapAlloc(proc_heap, 0, len);
-    if (out == 0) {
-        errPrintf("HeapAlloc failed.%x\n\r", GetLastError());
-        return 0;
-    }
-    memcpy(out, str, len);
-    return out;
-}
-
-void static __inline deletePath(_In_ LPWSTR path) {
-    size_t len = wcslen(path);
-    memset(path, 0, len);
-    HeapFree(proc_heap, 0, path);
-}
-
-// All Functions are only used internally and are parameter checked by the calling functions
-#pragma warning(disable : 6054)
-#pragma warning(disable : 6386)
-
-BSTATUS static parsePath(_In_ LPCWSTR usr_path, _Out_ LPWSTR* path, _Out_ LPWSTR** tokens, _Out_ LPDWORD n_tokens) {
-    LPWSTR pth = storePath(usr_path);
-    if (pth == 0) {
-        return FALSE;
-    }
-    LPWSTR token_buf = storePath(usr_path);
-    size_t buflen = wcslen(token_buf) << 1;
-    if (token_buf == 0) {
-        deletePath(pth);
-        return FALSE;
-    }
-    LPWSTR pt = token_buf;
-    DWORD n_tok = 0;
-    while (*pt != 0) {
-        if (*pt == L'/') {
-            ++n_tok;
-        }
-        ++pt;
-    }
-    if (*pt != '/') {
-        ++n_tok;
-    }
-    size_t tokl = ((size_t)n_tok) << 3;
-    LPWSTR* toks = HeapAlloc(proc_heap, 0, tokl);
-    if (toks == 0) {
-        deletePath(pth);
-        deletePath(token_buf);
-        return FALSE;
-    }
-    pt = token_buf;
-    LPWSTR lt = token_buf;
-    n_tok = 0;
-    while (*pt != 0) {
-        if (*pt == L'/') {
-            *pt = 0;
-            toks[n_tok] = lt;
-            ++pt;
-            ++n_tok;
-            lt = pt;
-        }
-        else {
-            ++pt;
-        }
-    }
-    if (*lt != 0) {
-        toks[n_tok] = lt;
-        n_tok++;
-    }
-    *path = pth;
-    *tokens = toks;
-    *n_tokens = n_tok;
-    return TRUE;
-}
-
-#pragma warning(disable : 6101) // following function too complex for intellisense to get it right
+#pragma warning(disable: 6101) // the following function is too complex for intellisense to get it right
+#pragma warning(disable: 6386)
 // 8.3 Filename Generation:
 /*
 * Convert to OEM: if(not valid character) {
@@ -424,7 +348,6 @@ _mk83_pad_ext:
     b_extend[1] = ' ';
     b_extend[2] = ' ';
     return TRUE;
-#pragma warning(default : 6101)
 }
 
 BSTATUS static copyLFNEnt(_In_ PFAT_DIR_LONG ldir, _Out_ PWSTR chbuf) {
@@ -465,6 +388,8 @@ BSTATUS static copyLFNEnt(_In_ PFAT_DIR_LONG ldir, _Out_ PWSTR chbuf) {
     return TRUE;
 }
 
+#pragma warning(default: 6386)
+
 static BOOL _8_3_NameCmp(_In_ PFAT_DIR83 ent, _In_ char* name, _In_ char* extension) {
     for (int i = 0; i < 8; i++) {
         if (ent->filename[i] != name[i])return FALSE;
@@ -472,7 +397,7 @@ static BOOL _8_3_NameCmp(_In_ PFAT_DIR83 ent, _In_ char* name, _In_ char* extens
     return (ent->extension[0] == extension[0]) && (ent->extension[1] == extension[1]) && (ent->extension[2] == extension[2]);
 }
 
-#pragma warning(disable : 6101)
+#pragma warning(disable: 6054)
 NTSTATUS static getLongName(_In_ PFAT_DIR_LONG ents, _In_opt_ size_t index, _Out_ PWSTR buf) {
     if (index == 0) {
         return STATUS_NOT_FOUND;
@@ -508,11 +433,8 @@ NTSTATUS static getLongName(_In_ PFAT_DIR_LONG ents, _In_opt_ size_t index, _Out
 
     return STATUS_SUCCESS;
 }
+#pragma warning(default: 6054)
 #pragma warning(default: 6101)
-
-// All Functions are only used internally and are parameter checked by the calling functions
-#pragma warning(default : 6386)
-#pragma warning(default : 6054)
 
 NTSTATUS static getName(_In_ PFAT_DIR83 ents, _In_ size_t index, _In_ PFS_NAME_INFO name, _In_ BOOL noLFN, _In_ BOOL no83) {
     NTSTATUS status = STATUS_SUCCESS;
@@ -2002,6 +1924,9 @@ NTSTATUS fat32GetInfo(_In_ PFAT_DRIVER_IMPL drv, _In_ HANDLE handle, _In_ FS_INF
         // TODO
 
         return STATUS_NOT_IMPLEMENTED;
+    }
+    else if (info == FSCustomAction) {
+        return STATUS_NOT_SUPPORTED;
     }
 
     return STATUS_SUCCESS;

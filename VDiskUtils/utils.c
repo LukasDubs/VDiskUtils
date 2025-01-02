@@ -1,4 +1,5 @@
 #include "vdisk.h"
+#include "console.h"
 
 uint32_t CRCTable[256];
 
@@ -100,5 +101,78 @@ BSTATUS setEOF(_In_ HANDLE file, _In_ UINT64 length) {
 		SetLastError(status);
 		return FALSE;
 	}
+	return TRUE;
+}
+
+LPWSTR __inline storePath(_In_ const LPCWSTR str) {
+	size_t len = (wcslen(str) + 1) << 1; // len + 1 since we want to include the terminating null character
+	LPWSTR out = HeapAlloc(proc_heap, 0, len);
+	if (out == 0) {
+		errPrintf("HeapAlloc failed:%x\n\r", GetLastError());
+		return 0;
+	}
+	memcpy(out, str, len);
+	return out;
+}
+
+void __inline deletePath(_In_ LPWSTR path) {
+	size_t len = wcslen(path);
+	memset(path, 0, len);
+	HeapFree(proc_heap, 0, path);
+}
+
+#pragma warning(disable : 6054) // buffer cannot overrun since content of string is constant
+#pragma warning(disable : 6386) // 
+
+BSTATUS parsePath(_In_ LPCWSTR usr_path, _Out_ LPWSTR* path, _Out_ LPWSTR** tokens, _Out_ LPDWORD n_tokens) {
+	LPWSTR pth = storePath(usr_path);
+	if (pth == 0) {
+		return FALSE;
+	}
+	LPWSTR token_buf = storePath(usr_path);
+	if (token_buf == 0) {
+		deletePath(pth);
+		return FALSE;
+	}
+	size_t buflen = wcslen(token_buf) << 1;
+	LPWSTR pt = token_buf;
+	DWORD n_tok = 0;
+	while (*pt != 0) {
+		if (*pt == L'/') {
+			++n_tok;
+		}
+		++pt;
+	}
+	if (*pt != '/') {
+		++n_tok;
+	}
+	LPWSTR* toks = HeapAlloc(proc_heap, 0, ((size_t)n_tok) << 3);
+	if (toks == 0) {
+		deletePath(pth);
+		deletePath(token_buf);
+		return FALSE;
+	}
+	pt = token_buf;
+	LPWSTR lt = token_buf;
+	n_tok = 0;
+	while (*pt != 0) {
+		if (*pt == L'/') {
+			*pt = 0;
+			toks[n_tok] = lt;
+			++pt;
+			++n_tok;
+			lt = pt;
+		}
+		else {
+			++pt;
+		}
+	}
+	if (*lt != 0) {
+		toks[n_tok] = lt;
+		++n_tok;
+	}
+	*path = pth;
+	*tokens = toks;
+	*n_tokens = n_tok;
 	return TRUE;
 }

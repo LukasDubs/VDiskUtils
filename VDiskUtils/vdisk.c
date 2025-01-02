@@ -193,7 +193,7 @@ BSTATUS openVdiskI(_In_ size_t i) {
 		return FALSE;
 	}
 	else {
-		HANDLE f = CreateFileW(vdisk_list[i]->path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+		HANDLE f = CreateFileW(vdisk_list[i]->path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_RANDOM_ACCESS, 0);
 		if (f == INVALID_HANDLE_VALUE) {
 			errPrintf("Opening file:%ws win32:%x\n\r", vdisk_list[i]->path, GetLastError());
 			return FALSE;
@@ -456,6 +456,10 @@ PFS_DRIVER createDriver(_In_ PVDISK vdisk, _In_opt_ UINT32 partition_index) {
 	PFS_DRIVER drv = 0;
 	if (createFATDriver(vdisk, partition_index, &drv)) {
 		exePrintf("Successfully created FAT driver\n\r");
+		return drv;
+	}
+	else if (createNTFSDriver(vdisk, partition_index, &drv)) {
+		exePrintf("Successfully created NTFS driver\n\r");
 		return drv;
 	}
 	return 0;

@@ -87,6 +87,7 @@ typedef enum _FS_INFO_TYPE {
 	FSGetFirst,  // gets the first file in directory
 	FSGetNext,   // gets the next file in the directory (doesn't require
 	FSGetPhys,   // gets info about the physical location of the file
+	FSCustomAction, // driver specific actions, e.g. NTFS querying all attributes
 	FSInfoMax
 } FS_INFO_TYPE, * PFS_INFO_TYPE;
 
@@ -94,7 +95,7 @@ typedef struct _FS_NAME_INFO {
 	UINT32 name_8_3_length;      // length of 8.3 name
 	UINT32 name_8_3_max_length;  // max length of 8.3 name
 	PSTR name_8_3;              // 8.3 name buffer
-	UINT32 long_name_length;     // LFN length
+	UINT32 long_name_length;     // LFN length in characters
 	UINT32 long_name_max_length; // LFN max length
 	PWSTR long_name;             // LFN buffer
 } FS_NAME_INFO, * PFS_NAME_INFO;
@@ -109,20 +110,25 @@ typedef struct _FS_FILESIZE_INFO {
 #define FS_ATTRIBUTE_SYSTEM 0x4
 #define FS_ATTRIBUTE_ARCHIVE 0x8
 #define FS_ATTRIBUTE_DIR 0x10 // read-only attribute
+#define FS_ATTRIBUTE_MASK 0xFF // standard FS attributes
+#define FS_SPECIFIC_ATTRIBUTE_MASk 0xFFFF0000 // fs-specific attributes
 
 typedef UINT32 FS_ATTRIBUTE_INFO, * PFS_ATTRIBUTE_INFO; // attribute: FS_ATTRIBUTE_...
 
 typedef struct _FS_DATE_INFO {
-	FILETIME creation;      // creation time as FILETIME
-	FILETIME last_modified; // last modified time as FILETIME
-	FILETIME last_accessed; // last accessed time as FILETIME
+	union {
+		FILETIME creation;      // creation time as FILETIME
+		UINT64 creation_u64;      // last modified time as UINT64
+	};
+	union {
+		FILETIME last_modified; // last modified time as FILETIME
+		UINT64 last_modified_u64; // last modified time as UINT64
+	};
+	union {
+		FILETIME last_accessed; // last accessed time as FILETIME
+		UINT64 last_accessed_u64; // last accessed time as UINT64
+	};
 } FS_DATE_INFO, * PFS_DATE_INFO;
-
-typedef struct _FS_GET_FIRST_INFO {
-	BOOL recursive;			// get subdirs too
-	UINT32 recursion_limit; // recursion limit (0 means max supported)
-	HANDLE h_query;			// returns the first handle that can be used for get_next
-} FS_GET_FIRST_INFO, * PFS_GET_FIRST_INFO;
 
 #define FS_PATH_QUERY_RELATIVE 0x1 // returns the relative path if the handle was opened with FSGetFirst
 #define FS_PATH_83 0x8             // returns the path only containing the 8.3-Names
@@ -133,6 +139,14 @@ typedef struct _FS_GET_PATH_INFO {
 	PWSTR path;        // buffer that gets the path written to
 } FS_GET_PATH_INFO, * PFS_GET_PATH_INFO;
 
+typedef struct _FS_GET_FIRST_INFO {
+	BOOL recursive;			// get subdirs too
+	UINT32 recursion_limit; // recursion limit (0 means max supported)
+	HANDLE h_query;			// returns the first handle that can be used for get_next
+} FS_GET_FIRST_INFO, * PFS_GET_FIRST_INFO;
+
+
+
 #define FS_CREATE_FLAG_CREATE_NEW    0x0 // creates only if the file doesn't exist
 #define FS_CREATE_FLAG_CREATE_ALWAYS 0x1 // creates always a new empty file, even if the file already exists
 #define FS_CREATE_FLAG_OPEN_EXISTING 0x2 // open existing file (should use the open function to not have all the overhead)
@@ -141,17 +155,19 @@ typedef struct _FS_GET_PATH_INFO {
 
 typedef NTSTATUS(*FS_OPEN_FILE)(_In_ void* this_handle, _In_ LPCWSTR path, _In_opt_ HANDLE current_path, _Out_ PHANDLE handle);
 typedef NTSTATUS(*FS_CLOSE_FILE)(_In_ void* this_handle, _In_ HANDLE handle);
-typedef NTSTATUS(*FS_CREATE_FILE)(_In_ void* this_handle, _In_ LPCWSTR path, _In_opt_ HANDLE current_path, _Out_ PHANDLE, _In_opt_ UINT32 flags);
+typedef NTSTATUS(*FS_CREATE_FILE)(_In_ void* this_handle, _In_ LPCWSTR path, _In_opt_ HANDLE current_path, _Out_ PHANDLE handle, _In_opt_ UINT32 flags);
 typedef NTSTATUS(*FS_DELETE_FILE)(_In_ void* this_handle, _In_ HANDLE file);
 typedef NTSTATUS(*FS_READ_FILE)(_In_ void* this_handle, _In_ HANDLE file, _In_opt_ size_t offset, _In_ size_t length, _In_reads_bytes_(length) void* buffer);
 typedef NTSTATUS(*FS_WRITE_FILE)(_In_ void* this_handle, _In_ HANDLE file, _In_opt_ size_t offset, _In_ size_t length, _Out_writes_bytes_(length) void* buffer);
 typedef NTSTATUS(*FS_GET_FILE_INFO)(_In_ void* this_handle, _In_ HANDLE handle, _In_ FS_INFO_TYPE info, _Inout_updates_bytes_opt_(data_size) PVOID query_data, _In_opt_ DWORD data_size);
 typedef NTSTATUS(*FS_SET_FILE_INFO)(_In_ void* this_handle, _In_ HANDLE handle, _In_ FS_INFO_TYPE info, _In_reads_bytes_(data_size) PVOID query_data, _In_ DWORD data_size);
 
-#define FS_DRIVER_TYPE_FAT12 0x12
-#define FS_DRIVER_TYPE_FAT16 0x16
-#define FS_DRIVER_TYPE_FAT32 0x32
-#define FS_DRIVER_TYPE_EXFAT 0x33
+#define FS_DRIVER_TYPE_FAT(x) ((('FAT') << 8) | x)
+#define FS_DRIVER_TYPE_FAT12 FS_DRIVER_TYPE_FAT(0x12)
+#define FS_DRIVER_TYPE_FAT16 FS_DRIVER_TYPE_FAT(0x16)
+#define FS_DRIVER_TYPE_FAT32 FS_DRIVER_TYPE_FAT(0x32)
+#define FS_DRIVER_TYPE_EXFAT FS_DRIVER_TYPE_FAT(0x33)
+
 #define FS_DRIVER_TYPE_NTFS  'NTFS'
 
 typedef struct _FS_DRIVER {

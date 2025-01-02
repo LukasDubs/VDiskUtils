@@ -16,3 +16,6 @@ typedef struct _IO_STATUS_BLOCK {
 extern NTSYSCALLAPI NTSTATUS NTAPI NtSetInformationFile(_In_ HANDLE FileHandle, _Out_ PIO_STATUS_BLOCK IoStatusBlock, _In_ PVOID FileInformation, _In_ ULONG Length, _In_ UINT FileInformationClass);
 
 BSTATUS setEOF(_In_ HANDLE file, _In_ UINT64 length);
+LPWSTR __inline storePath(_In_ const LPCWSTR str);
+void __inline deletePath(_In_ LPWSTR path);
+BSTATUS parsePath(_In_ LPCWSTR usr_path, _Out_ LPWSTR* path, _Out_ LPWSTR** tokens, _Out_ LPDWORD n_tokens);
