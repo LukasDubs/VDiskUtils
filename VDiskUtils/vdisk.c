@@ -7,12 +7,12 @@ size_t currentVDISK = 0;
 size_t currentPartition = 0xFFFFFFFFFFFFFFFF;
 PVDISK_DRIVER raw_driver = 0;
 
-BSTATUS getRawSize(_In_ PVDISK vdisk, _Inout_ size_t* length) {
+BSTATUS static getRawSize(_In_ PVDISK vdisk, _Inout_ size_t* length) {
 	*length = vdisk->length;
 	return TRUE;
 }
 
-BSTATUS rawRead(_In_ PVDISK vdisk, _In_opt_ size_t offset, _In_ size_t length, _Out_writes_bytes_all_(length) void* buffer) {
+BSTATUS static rawRead(_In_ PVDISK vdisk, _In_opt_ size_t offset, _In_ size_t length, _Out_writes_bytes_all_(length) void* buffer) {
 	if ((vdisk->attributes & VDISK_ATTRIBUTE_FLAG_MAPPED)) {
 		if (vdisk->length < (offset + length)) {
 			errPrintf("Read exceeds bounds!\n\r");
@@ -27,7 +27,7 @@ BSTATUS rawRead(_In_ PVDISK vdisk, _In_opt_ size_t offset, _In_ size_t length, _
 	}
 }
 
-BSTATUS rawWrite(_In_ PVDISK vdisk, _In_opt_ size_t offset, _In_ size_t length, _In_reads_bytes_(length) void* buffer) {
+BSTATUS static rawWrite(_In_ PVDISK vdisk, _In_opt_ size_t offset, _In_ size_t length, _In_reads_bytes_(length) void* buffer) {
 	if ((vdisk->attributes & VDISK_ATTRIBUTE_FLAG_MAPPED)) {
 		if (vdisk->length < (offset + length)) {
 			errPrintf("Write exceeds bounds!\n\r");
@@ -42,7 +42,7 @@ BSTATUS rawWrite(_In_ PVDISK vdisk, _In_opt_ size_t offset, _In_ size_t length, 
 	}
 }
 
-void exitRawDriver(_In_ PVDISK_DRIVER this_ptr) {
+void static exitRawDriver(_In_ PVDISK_DRIVER this_ptr) {
 	// global driver, nothing to do
 }
 

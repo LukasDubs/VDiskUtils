@@ -2,14 +2,33 @@
 #include "console.h"
 #include "ntfs_internal.h"
 
+static void freeIndexReader(_In_ PNTFS_INDEX_READER reader);
+
 void static NTFSDriverExit(PNTFS_DRIVER drv) {
+	for (UINT32 i = 0; i < MAX_NTFS_HANDLES; i++) {
+		PNTFS_HANDLE hdl = &(drv->handle_table[i]);
+		if ((hdl->flags & NTFS_HANDLE_OPEN) != 0) {
+			UINT32 f = hdl->flags;
+			hdl->flags = 0;
+			VirtualFree(hdl->file_record, 0, MEM_RELEASE);
+			if ((f & NTFS_HANDLE_QUERY) != 0) {
+				if ((f & NTFS_HANDLE_RECURSIVE) != 0) {
+					VirtualFree(hdl->query_info->offset_buf, 0, MEM_RELEASE);
+				}
+				freeIndexReader(hdl->query_info->reader);
+				memset(hdl->query_info, 0, sizeof(NTFS_QUERY_INFO));
+				HeapFree(proc_heap, 0, hdl->query_info);
+			}
+			memset(hdl, 0, sizeof(NTFS_HANDLE));
+		}
+	}
 	VirtualFree(drv->handle_table, 0, MEM_RELEASE);
 	memset(drv, 0, sizeof(NTFS_DRIVER));
 	HeapFree(proc_heap, 0, drv);
 }
 
 size_t static __inline allocHandle(PNTFS_DRIVER drv) {
-	// start loop at 1 since 0 can be interpreted as a invalid handle value
+	// start loop at 1 since 0 can be interpreted as an invalid handle value
 	for (size_t i = 1; i < MAX_NTFS_HANDLES; i++) {
 		if ((drv->handle_table[i].flags & NTFS_HANDLE_OPEN) == 0) {
 			return i;
@@ -589,7 +608,13 @@ NTSTATUS static NTFSGetFile(_In_ PNTFS_DRIVER drv, _In_ LPCWSTR* tokens, _In_ DW
 			++i;
 			continue;
 		}
-		if (toklen == 2) {
+		if (toklen == 1) {
+			if (*(tokens[i]) == L'.') {
+				++i;
+				continue;
+			}
+		}
+		else if (toklen == 2) {
 			if (wcsncmp(L"..", tokens[i], 2) == 0) {
 				PNTFS_STD_ATTRIB_HEADER attrib = (PNTFS_STD_ATTRIB_HEADER)(((size_t)file) + file->attribs_offset);
 				while (attrib->id != NTFS_END_MARKER) {
@@ -614,7 +639,6 @@ NTSTATUS static NTFSGetFile(_In_ PNTFS_DRIVER drv, _In_ LPCWSTR* tokens, _In_ DW
 				continue;
 			}
 			PNTFS_FILE_NAME name = (PNTFS_FILE_NAME)(((size_t)v) + sizeof(NTFS_INDEX_VALUE));
-			dbgPrintf("name:%.*ws\n\r", name->n_chars, (PWCHAR)(((size_t)name) + sizeof(NTFS_FILE_NAME)));
 			if (name->n_chars == toklen) {
 				if (wcsncmp((PCWCHAR)(((size_t)name) + sizeof(NTFS_FILE_NAME)), tokens[i], name->n_chars) == 0) {
 					ref = v->file_ref;

@@ -127,6 +127,14 @@ BOOL rdCon(_Out_ PVOID buffer, _In_ DWORD n_chars_to_read, _Out_ LPDWORD n_chars
 	return ReadConsoleW(con_in, buffer, n_chars_to_read, n_chars_read, 0);
 }
 
+BOOL static WINAPI ConHandler(_In_ DWORD ctrl) {
+	if (ctrl == CONTROL_C_EXIT) {
+		errPrintf("Contorl-C not supported!\n\r");
+		return TRUE;
+	}
+	return FALSE;
+}
+
 int __stdcall WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPSTR lpCmdLine, _In_ int nShowCmd) {
 	LPWSTR cmdl = GetCommandLineW();
 	//TODO parse args
@@ -142,11 +150,13 @@ int __stdcall WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
 		errPrintf("Err:%x\n\r", GetLastError());
 	}
 	else {
-		mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+		mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING | ENABLE_PROCESSED_INPUT | ENABLE_PROCESSED_OUTPUT;
 		if (!SetConsoleMode(con_out, mode)) {
 			errPrintf("Err:%x\n\r", GetLastError());
 		}
 	}
+
+	SetConsoleCtrlHandler(ConHandler, TRUE);
 
 	proc_heap = GetProcessHeap();
 	calcTable();

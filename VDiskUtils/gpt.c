@@ -1,7 +1,7 @@
 #include "vdisk.h"
 #include "console.h"
 
-BOOL isValidEFI_GPTPartitionTable1(_In_ PGPT_PART_TABLE gpt) {
+BOOL static isValidEFI_GPTPartitionTable1(_In_ PGPT_PART_TABLE gpt) {
 	if (gpt->signature != EFI_SIGNATURE) {
 		dbgPrintf("Invalid EFI Signature\n\r");
 		return FALSE;
@@ -37,7 +37,7 @@ BOOL isValidEFI_GPTPartitionTable1(_In_ PGPT_PART_TABLE gpt) {
 	return TRUE;
 }
 
-BOOL isValidEFI_GPTPartitionTable2(_In_ PGPT_PART_TABLE gpt, _In_ PGPT_PART_TABLE orig_gpt) {
+BOOL static isValidEFI_GPTPartitionTable2(_In_ PGPT_PART_TABLE gpt, _In_ PGPT_PART_TABLE orig_gpt) {
 	if (gpt->signature != EFI_SIGNATURE) {
 		dbgPrintf("Invalid EFI Signature\n\r");
 		return FALSE;
@@ -89,7 +89,7 @@ BOOL isValidEFI_GPTPartitionTable2(_In_ PGPT_PART_TABLE gpt, _In_ PGPT_PART_TABL
 	return TRUE;
 }
 
-BSTATUS calcPartitionTableChecksums(_In_ PGPT_PART_TABLE gpt, _In_ PVDISK vdisk, _Inout_ uint32_t* header_checksum, _Inout_ uint32_t* partition_table) {
+BSTATUS static calcPartitionTableChecksums(_In_ PGPT_PART_TABLE gpt, _In_ PVDISK vdisk, _Inout_ uint32_t* header_checksum, _Inout_ uint32_t* partition_table) {
 	uint64_t length = (uint64_t)(gpt->part_ent_size) * (uint64_t)(gpt->n_parts);
 	uint64_t offset = gpt->parts_start_lba << 9;
 	*partition_table = 0;

@@ -81,6 +81,90 @@ BOOL static parseI(LPWSTR str, size_t* num) {
 	return parseDec(str, num);
 }
 
+void parseAttribute(DWORD attribute, PCHAR str) {
+	if ((attribute & FS_ATTRIBUTE_READ_ONLY) != 0) {
+		str[0] = 'R';
+	}
+	else {
+		str[0] = ' ';
+	}
+	str[1] = ' ';
+	if ((attribute & FS_ATTRIBUTE_HIDDEN) != 0) {
+		str[2] = 'H';
+	}
+	else {
+		str[2] = ' ';
+	}
+	str[3] = ' ';
+	if ((attribute & FS_ATTRIBUTE_SYSTEM) != 0) {
+		str[4] = 'S';
+	}
+	else {
+		str[4] = ' ';
+	}
+	str[5] = ' ';
+	if ((attribute & FS_ATTRIBUTE_ARCHIVE) != 0) {
+		str[6] = 'A';
+	}
+	else {
+		str[6] = ' ';
+	}
+	str[7] = ' ';
+	if ((attribute & FS_ATTRIBUTE_DIR) != 0) {
+		str[8] = 'D';
+		str[9] = 'I';
+		str[10] = 'R';
+	}
+	else {
+		str[8] = ' ';
+		str[9] = ' ';
+		str[10] = ' ';
+	}
+	str[11] = 0;
+}
+
+LPCWSTR static parseErrorMsg(NTSTATUS status) {
+	switch (status) {
+	case STATUS_SUCCESS:
+		return L"STATUS_SUCCESS";
+	case STATUS_UNSUCCESSFUL:
+		return L"STATUS_UNSUCCESSFUL";
+	case STATUS_NOT_IMPLEMENTED:
+		return L"STATUS_NOT_IMPLEMENTED";
+	case STATUS_INVALID_HANDLE:
+		return L"STATUS_INVALID_HANDLE";
+	case STATUS_INVALID_PARAMETER:
+		return L"STATUS_INVALID_PARAMETER";
+	case STATUS_NO_SUCH_FILE:
+		return L"STATUS_NO_SUCH_FILE";
+	case STATUS_BUFFER_TOO_SMALL:
+		return L"STATUS_BUFFER_TOO_SMALL";
+	case STATUS_DISK_CORRUPT_ERROR:
+		return L"STATUS_DISK_CORRUPT_ERROR";
+	case STATUS_OBJECT_PATH_INVALID:
+		return L"STATUS_OBJECT_PATH_INVALID";
+	case STATUS_OBJECT_PATH_NOT_FOUND:
+		return L"STATUS_OBJECT_PATH_NOT_FOUND";
+	case STATUS_DISK_FULL:
+		return L"STATUS_DISK_FULL";
+	case STATUS_NOT_SUPPORTED:
+		return L"STATUS_NOT_SUPPORTED";
+	case STATUS_INTERNAL_ERROR:
+		return L"STATUS_INTERNAL_ERROR";
+	case STATUS_NOT_A_DIRECTORY:
+		return L"STATUS_NOT_A_DIRECTORY";
+	case STATUS_NOT_FOUND:
+		return L"STATUS_NOT_FOUND";
+	case STATUS_FREE_SPACE_TOO_FRAGMENTED:
+		return L"STATUS_FREE_SPACE_TOO_FRAGMENTED";
+	case STATUS_INDEX_OUT_OF_BOUNDS:
+		return L"STATUS_INDEX_OUT_OF_BOUNDS";
+	default:
+		return L"Unknown NTSTATUS";
+
+	}
+}
+
 size_t static prepStr(LPWSTR arg0) {
 	size_t arg0l = 0;
 	while (*arg0 != 0) {
@@ -251,7 +335,7 @@ int execCmd(LPWSTR* args, size_t argc) {
 			if (driver != 0) {
 				NTSTATUS status = driver->open(driver, L"/", 0, &current_dir);
 				if (status != 0) {
-					errPrintf("opening root dir failed:%x\n\r", status);
+					errPrintf("opening root dir failed:%x (%ls)\n\r", status, parseErrorMsg(status));
 					driver->exit(driver);
 					driver = 0;
 				}
@@ -396,7 +480,7 @@ int execFsCmd(LPWSTR* args, size_t argc) {
 				info.recursion_limit = (UINT32)rl;
 				NTSTATUS status = driver->get_info(driver, current_dir, FSGetFirst, &info, sizeof(info));
 				if (status != 0) {
-					errPrintf("Error querying directory:%x\n\r", status);
+					errPrintf("Error querying directory:%x (%ls)\n\r", status, parseErrorMsg(status));
 				}
 				else if (info.h_query == 0) {
 					errPrintf("Invalid Handle returned!\n\r");
@@ -411,16 +495,18 @@ int execFsCmd(LPWSTR* args, size_t argc) {
 						errPrintf("VirtualAlloc failed:%x\n\r", GetLastError());
 					}
 					else {
+						CHAR attr_str[12];
 						do {
 							memset(path.path, 0, 0x20000);
 							status = driver->get_info(driver, info.h_query, FSGetPath, &path, sizeof(path));
 							if (status != 0) break;
 							status = driver->get_info(driver, info.h_query, FSAttribute, &attrib, sizeof(attrib));
 							if (status != 0) break;
-							exePrintf("\tattribute:0x%x\tpath:%ws\n\r", attrib, path.path);
+							parseAttribute(attrib, attr_str);
+							exePrintf("\tattribute:0x%x\t%s \tpath:%ws\n\r", attrib, attr_str, path.path);
 						} while ((status = driver->get_info(driver, info.h_query, FSGetNext, 0, 0)) == STATUS_MORE_ENTRIES);
 						if (status != 0) {
-							errPrintf("Error:%x\n\r", status);
+							errPrintf("Error:%x (%ls)\n\r", status, parseErrorMsg(status));
 						}
 						driver->close(driver, info.h_query);
 						VirtualFree(path.path, 0, MEM_RELEASE);
@@ -436,12 +522,12 @@ int execFsCmd(LPWSTR* args, size_t argc) {
 				HANDLE hd;
 				NTSTATUS status;
 				if ((status = driver->open(driver, args[1], current_dir, &hd)) != 0) {
-					errPrintf("Couldn't change dir:%x\n\r", status);
+					errPrintf("Couldn't change dir:%x (%ls)\n\r", status, parseErrorMsg(status));
 				}
 				else {
 					DWORD attrib = 0;
 					if ((status = driver->get_info(driver, hd, FSAttribute, &attrib, sizeof(attrib))) != 0) {
-						errPrintf("Cannot get file attribute:%x\n\r", status);
+						errPrintf("Cannot get file attribute:%x (%ls)\n\r", status, parseErrorMsg(status));
 					}
 					else if((attrib & FS_ATTRIBUTE_DIR) != 0) {
 						driver->close(driver, current_dir);
@@ -478,7 +564,7 @@ int execFsCmd(LPWSTR* args, size_t argc) {
 			else {
 				NTSTATUS status = driver->open(driver, args[1], current_dir, &current_file);
 				if (status != 0) {
-					errPrintf("Opening File failed:%x\n\r", status);
+					errPrintf("Opening File failed:%x (%ls)\n\r", status, parseErrorMsg(status));
 				}
 				else {
 					exePrintf("Opened File successfully\n\r");
@@ -532,10 +618,18 @@ int execFsCmd(LPWSTR* args, size_t argc) {
 									data.long_name_max_length = 256;
 									NTSTATUS status = driver->get_info(driver, current_file, FSName, &data, sizeof(data));
 									if (status != 0) {
-										errPrintf("Getting filename failed:%x\n\r", status);
+										errPrintf("Getting filename failed:%x (%ls)\n\r", status, parseErrorMsg(status));
 									}
 									else {
-										exePrintf("LFN: \"%ws\"\t8.3-Name:\"%s\"\n\r", data.long_name, data.name_8_3);
+										if (data.name_8_3_length == 0) {
+											exePrintf("LFN:\"%ws\"\n\r", data.long_name);
+										}
+										else if (data.long_name_length == 0) {
+											exePrintf("8.3-Name:\"%s\"\n\r", data.name_8_3);
+										}
+										else {
+											exePrintf("LFN: \"%ws\"\t8.3-Name:\"%s\"\n\r", data.long_name, data.name_8_3);
+										}
 									}
 									HeapFree(proc_heap, 0, data.name_8_3);
 								}
@@ -552,7 +646,7 @@ int execFsCmd(LPWSTR* args, size_t argc) {
 								FS_FILESIZE_INFO data = { 0 };
 								NTSTATUS status = driver->get_info(driver, current_file, FSSize, &data, sizeof(data));
 								if (status != 0) {
-									errPrintf("Getting filename failed:%x\n\r", status);
+									errPrintf("Getting filename failed:%x (%ls)\n\r", status, parseErrorMsg(status));
 								}
 								else {
 									exePrintf("Filesize:%llu, Size on Disk:%llu\n\r", data.size, data.size_on_disk);
@@ -567,10 +661,12 @@ int execFsCmd(LPWSTR* args, size_t argc) {
 								FS_ATTRIBUTE_INFO data = { 0 };
 								NTSTATUS status = driver->get_info(driver, current_file, FSAttribute, &data, sizeof(data));
 								if (status != 0) {
-									errPrintf("Getting filename failed:%x\n\r", status);
+									errPrintf("Getting filename failed:%x (%ls)\n\r", status, parseErrorMsg(status));
 								}
 								else {
-									exePrintf("File Attribute:%x\n\r", data);
+									CHAR attr_str[12];
+									parseAttribute(data, attr_str);
+									exePrintf("File Attribute:0x%x\t%s\n\r", data, attr_str);
 								}
 							}
 						}
@@ -582,7 +678,7 @@ int execFsCmd(LPWSTR* args, size_t argc) {
 								FS_DATE_INFO data = { 0 };
 								NTSTATUS status = driver->get_info(driver, current_file, FSDateInfo, &data, sizeof(data));
 								if (status != 0) {
-									errPrintf("Getting filename failed:%x\n\r", status);
+									errPrintf("Getting filename failed:%x (%ls)\n\r", status, parseErrorMsg(status));
 								}
 								else {
 									SYSTEMTIME systime = { 0 };
@@ -603,7 +699,7 @@ int execFsCmd(LPWSTR* args, size_t argc) {
 								FS_DATE_INFO data = { 0 };
 								NTSTATUS status = driver->get_info(driver, current_file, FSDateInfo, &data, sizeof(data));
 								if (status != 0) {
-									errPrintf("Getting filename failed:%x\n\r", status);
+									errPrintf("Getting filename failed:%x (%ls)\n\r", status, parseErrorMsg(status));
 								}
 								else {
 									SYSTEMTIME systime = { 0 };
@@ -624,7 +720,7 @@ int execFsCmd(LPWSTR* args, size_t argc) {
 								FS_DATE_INFO data = { 0 };
 								NTSTATUS status = driver->get_info(driver, current_file, FSDateInfo, &data, sizeof(data));
 								if (status != 0) {
-									errPrintf("Getting filename failed:%x\n\r", status);
+									errPrintf("Getting filename failed:%x (%ls)\n\r", status, parseErrorMsg(status));
 								}
 								else {
 									SYSTEMTIME systime = { 0 };
@@ -645,7 +741,7 @@ int execFsCmd(LPWSTR* args, size_t argc) {
 								FS_DATE_INFO data = { 0 };
 								NTSTATUS status = driver->get_info(driver, current_file, FSDateInfo, &data, sizeof(data));
 								if (status != 0) {
-									errPrintf("Getting filename failed:%x\n\r", status);
+									errPrintf("Getting filename failed:%x (%ls)\n\r", status, parseErrorMsg(status));
 								}
 								else {
 									SYSTEMTIME systime = { 0 };

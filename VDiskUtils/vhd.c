@@ -11,7 +11,7 @@ typedef struct _VHD_FIXED_DRIVER {
 	size_t length;
 } VHD_FIXED_DRIVER, * PVHD_FIXED_DRIVER;
 
-BSTATUS getFixedSize(_In_ PVDISK vdisk, _Inout_ size_t* length) {
+BSTATUS static getFixedSize(_In_ PVDISK vdisk, _Inout_ size_t* length) {
 	PVHD_FIXED_DRIVER drv = (PVHD_FIXED_DRIVER)(vdisk->driver);
 	if (vdisk != drv->vdisk) {
 		errPrintf("Wrong vdisk for this driver!\n\r");
@@ -21,7 +21,7 @@ BSTATUS getFixedSize(_In_ PVDISK vdisk, _Inout_ size_t* length) {
 	return TRUE;
 }
 
-BSTATUS fixedVHDRead(_Inout_ PVDISK vdisk, _In_opt_ size_t offset, _In_ size_t length, _Out_writes_bytes_all_(length) void* buffer) {
+BSTATUS static fixedVHDRead(_Inout_ PVDISK vdisk, _In_opt_ size_t offset, _In_ size_t length, _Out_writes_bytes_all_(length) void* buffer) {
 	PVHD_FIXED_DRIVER drv = (PVHD_FIXED_DRIVER)(vdisk->driver);
 	if (vdisk != drv->vdisk) {
 		errPrintf("Wrong vdisk for this driver!\n\r");
@@ -39,7 +39,7 @@ BSTATUS fixedVHDRead(_Inout_ PVDISK vdisk, _In_opt_ size_t offset, _In_ size_t l
 	return TRUE;
 }
 
-BSTATUS fixedVHDWrite(_Inout_ PVDISK vdisk, _In_opt_ size_t offset, _In_ size_t length, _In_reads_bytes_(length) void* buffer) {
+BSTATUS static fixedVHDWrite(_Inout_ PVDISK vdisk, _In_opt_ size_t offset, _In_ size_t length, _In_reads_bytes_(length) void* buffer) {
 	PVHD_FIXED_DRIVER drv = (PVHD_FIXED_DRIVER)(vdisk->driver);
 	if (vdisk != drv->vdisk) {
 		errPrintf("Wrong vdisk for this driver!\n\r");
@@ -57,7 +57,7 @@ BSTATUS fixedVHDWrite(_Inout_ PVDISK vdisk, _In_opt_ size_t offset, _In_ size_t 
 	return TRUE;
 }
 
-void exitFixedVHDDriver(_In_ PVHD_FIXED_DRIVER t) {
+void static exitFixedVHDDriver(_In_ PVHD_FIXED_DRIVER t) {
 	memset(t, 0, sizeof(VHD_FIXED_DRIVER));
 	HeapFree(proc_heap, 0, t); // deallocate this driver because its an instance created for a specific vdisk
 }
@@ -74,7 +74,7 @@ typedef struct _VHD_DYNAMIC_DRIVER {
 	uint64_t bat_offset;
 } VHD_DYNAMIC_DRIVER, * PVHD_DYNAMIC_DRIVER;
 
-BSTATUS getDynamicVHDSize(_In_ PVDISK vdisk, _Inout_ size_t* length) {
+BSTATUS static getDynamicVHDSize(_In_ PVDISK vdisk, _Inout_ size_t* length) {
 	PVHD_DYNAMIC_DRIVER drv = (PVHD_DYNAMIC_DRIVER)(vdisk->driver);
 	if (vdisk != drv->vdisk) {
 		errPrintf("Wrong vdisk for this driver!\n\r");
@@ -84,7 +84,7 @@ BSTATUS getDynamicVHDSize(_In_ PVDISK vdisk, _Inout_ size_t* length) {
 	return TRUE;
 }
 
-BSTATUS dynamicVHDRead(_Inout_ PVDISK vdisk, _In_opt_ size_t offset, _In_ size_t length, _Out_writes_bytes_all_(length) void* buffer) {
+BSTATUS static dynamicVHDRead(_Inout_ PVDISK vdisk, _In_opt_ size_t offset, _In_ size_t length, _Out_writes_bytes_all_(length) void* buffer) {
 	PVHD_DYNAMIC_DRIVER drv = (PVHD_DYNAMIC_DRIVER)(vdisk->driver);
 	if (vdisk != drv->vdisk) {
 		errPrintf("Wrong vdisk for this driver!\n\r");
@@ -180,7 +180,7 @@ BSTATUS dynamicVHDRead(_Inout_ PVDISK vdisk, _In_opt_ size_t offset, _In_ size_t
 }
 
 // unt(ru/e)sted -> pray for it working!
-BSTATUS dynamicVHDWrite(_Inout_ PVDISK vdisk, _In_opt_ size_t offset, _In_ size_t length, _In_reads_bytes_(length) void* buffer) {
+BSTATUS static dynamicVHDWrite(_Inout_ PVDISK vdisk, _In_opt_ size_t offset, _In_ size_t length, _In_reads_bytes_(length) void* buffer) {
 	PVHD_DYNAMIC_DRIVER drv = (PVHD_DYNAMIC_DRIVER)(vdisk->driver);
 	if (vdisk != drv->vdisk) {
 		errPrintf("Wrong vdisk for this driver!\n\r");
@@ -320,7 +320,7 @@ BSTATUS dynamicVHDWrite(_Inout_ PVDISK vdisk, _In_opt_ size_t offset, _In_ size_
 	}
 }
 
-void exitDynamicVHDDriver(_In_ PVHD_FIXED_DRIVER t) {
+void static exitDynamicVHDDriver(_In_ PVHD_FIXED_DRIVER t) {
 	memset(t, 0, sizeof(VHD_DYNAMIC_DRIVER));
 	HeapFree(proc_heap, 0, t); // deallocate this driver because its an instance created for a specific vdisk
 }

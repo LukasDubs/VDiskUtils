@@ -76,8 +76,14 @@ BSTATUS selectPartition(_In_ size_t index);
 BSTATUS partitionRead(_In_ PVDISK vdisk, _In_opt_ UINT32 partition_index, _In_opt_ size_t offset, _In_ size_t length, _Out_writes_bytes_all_(length) void* buffer);
 BSTATUS partitionWrite(_In_ PVDISK vdisk, _In_opt_ UINT32 partition_index, _In_opt_ size_t offset, _In_ size_t length, _In_reads_bytes_(length) void* buffer);
 
+/*
+* Exits the Driver
+* args:
+*	this_handle:	Pointer to the FS_DRIVER to be closed
+*/
 typedef void(*FS_DRIVER_EXIT)(_In_ void* this_handle);
 
+// info type used in FS_GET_FILE_INFO/FS_GET_FILE_INFO
 typedef enum _FS_INFO_TYPE {
 	FSName,      // gets/sets the name
 	FSSize,      // gets/sets the size
@@ -85,16 +91,16 @@ typedef enum _FS_INFO_TYPE {
 	FSDateInfo,  // gets/sets the date
 	FSGetPath,   // gets the full path
 	FSGetFirst,  // gets the first file in directory
-	FSGetNext,   // gets the next file in the directory (doesn't require
-	FSGetPhys,   // gets info about the physical location of the file
-	FSCustomAction, // driver specific actions, e.g. NTFS querying all attributes
+	FSGetNext,   // gets the next file in the directory (doesn't require an Information Buffer)
+	FSGetPhys,   // gets info about the physical location of the file (currently not implemented)
+	FSCustomAction, // reserved for driver specific actions
 	FSInfoMax
 } FS_INFO_TYPE, * PFS_INFO_TYPE;
 
 typedef struct _FS_NAME_INFO {
 	UINT32 name_8_3_length;      // length of 8.3 name
 	UINT32 name_8_3_max_length;  // max length of 8.3 name
-	PSTR name_8_3;              // 8.3 name buffer
+	PSTR name_8_3;               // 8.3 name buffer
 	UINT32 long_name_length;     // LFN length in characters
 	UINT32 long_name_max_length; // LFN max length
 	PWSTR long_name;             // LFN buffer
@@ -146,30 +152,106 @@ typedef struct _FS_GET_FIRST_INFO {
 } FS_GET_FIRST_INFO, * PFS_GET_FIRST_INFO;
 
 
-
+// creation flags used in FS_CREATE_FILE
 #define FS_CREATE_FLAG_CREATE_NEW    0x0 // creates only if the file doesn't exist
 #define FS_CREATE_FLAG_CREATE_ALWAYS 0x1 // creates always a new empty file, even if the file already exists
 #define FS_CREATE_FLAG_OPEN_EXISTING 0x2 // open existing file (should use the open function to not have all the overhead)
 #define FS_CREATE_FLAG_OPEN_ALWAYS   0x3 // open always and create a new one if the file doesn't exist
 #define FS_CREATE_FLAG_DIRECTORY     0x4 // creates a directory instead of a file
 
+/*
+* Opens a File
+* args:
+*	this_handle:	Pointer to the FS_DRIVER to be used
+*	path:			Path to the file as String
+*	current path:	Handle of the current Path. Optional, if 0 the root dir is used
+*	handle:			Pointer to the returned Handle
+*/
 typedef NTSTATUS(*FS_OPEN_FILE)(_In_ void* this_handle, _In_ LPCWSTR path, _In_opt_ HANDLE current_path, _Out_ PHANDLE handle);
+
+/*
+* Closes a Handle
+* args:
+*	this_handle:	Pointer to the FS_DRIVER to be used
+*	handle:			The Handle that should be closed
+*/
 typedef NTSTATUS(*FS_CLOSE_FILE)(_In_ void* this_handle, _In_ HANDLE handle);
+
+/* 
+* Creates a File
+* args:
+*	this_handle:	Pointer to the FS_DRIVER to be used
+*	path:			Path to the File that should be created
+*	current_path:	Handle of the current Path. Optional, if 0 the root dir is used
+*	handle:			Pointer to the returned Handle
+*	flags:			Creation flags, must be one of FS_CREATE_FLAG_*
+*/
 typedef NTSTATUS(*FS_CREATE_FILE)(_In_ void* this_handle, _In_ LPCWSTR path, _In_opt_ HANDLE current_path, _Out_ PHANDLE handle, _In_opt_ UINT32 flags);
+
+/*
+* Deletes a File
+* args:
+*	this_handle:	Pointer to the FS_DRIVER to be used
+*	file:			Handle of the File that should be deleted
+*/
 typedef NTSTATUS(*FS_DELETE_FILE)(_In_ void* this_handle, _In_ HANDLE file);
-typedef NTSTATUS(*FS_READ_FILE)(_In_ void* this_handle, _In_ HANDLE file, _In_opt_ size_t offset, _In_ size_t length, _In_reads_bytes_(length) void* buffer);
-typedef NTSTATUS(*FS_WRITE_FILE)(_In_ void* this_handle, _In_ HANDLE file, _In_opt_ size_t offset, _In_ size_t length, _Out_writes_bytes_(length) void* buffer);
+
+/*
+* Reads from a File
+* args:
+*	this_handle:	Pointer to the FS_DRIVER to be used
+*	file:			Handle of the File from which should be read from
+*	offset:			Offset to the Start of the Read relative to the Beginning of the File
+*	length:			Length of the Read
+*	buffer:			Buffer into which the Data gets read
+*/
+typedef NTSTATUS(*FS_READ_FILE)(_In_ void* this_handle, _In_ HANDLE file, _In_opt_ size_t offset, _In_ size_t length, _Out_writes_bytes_(length) void* buffer);
+
+/*
+* Writes to a File
+* args:
+*	this_handle:	Pointer to the FS_DRIVER to be used
+*	file:			Handle of the File to which should be writte
+*	offset:			Offset to the Start of the Write relative ot the Beginning of the File
+*	length:			Length of the Write
+*	buffer:			Buffer from which the Data gets written
+*/
+typedef NTSTATUS(*FS_WRITE_FILE)(_In_ void* this_handle, _In_ HANDLE file, _In_opt_ size_t offset, _In_ size_t length, _In_reads_bytes_(length) void* buffer);
+
+/*
+* Gets Info from a File
+* args:
+*	this_handle:	Pointer to the FS_DRIVER to be used
+*	handle:			Handle of the File from which the Info should be read from
+*	info:			FS_INFO_TYPE which specifies the Information that should be retrieved
+*	query_data:		Pointer to the Information Buffer, Content depends on the info Argument
+*	data_size:		Length of the Information Buffer
+*/
 typedef NTSTATUS(*FS_GET_FILE_INFO)(_In_ void* this_handle, _In_ HANDLE handle, _In_ FS_INFO_TYPE info, _Inout_updates_bytes_opt_(data_size) PVOID query_data, _In_opt_ DWORD data_size);
+
+/*
+* Sets Info of a File
+* args:
+*	this_handle:	Pointer to the FS_DRIVER to be used
+*	handle:			Handle of the File to which the Info should be written
+*	info:			FS_INFO_TYPE which specifies the Information that should be written
+*	query_data:		Pointer to the Information Buffer, Cotent depends on the info Argument
+*	data_size:		Length of the Information Buffer
+*/
 typedef NTSTATUS(*FS_SET_FILE_INFO)(_In_ void* this_handle, _In_ HANDLE handle, _In_ FS_INFO_TYPE info, _In_reads_bytes_(data_size) PVOID query_data, _In_ DWORD data_size);
 
+
+/*
+* Driver types used to identify the driver
+*/
 #define FS_DRIVER_TYPE_FAT(x) ((('FAT') << 8) | x)
 #define FS_DRIVER_TYPE_FAT12 FS_DRIVER_TYPE_FAT(0x12)
 #define FS_DRIVER_TYPE_FAT16 FS_DRIVER_TYPE_FAT(0x16)
 #define FS_DRIVER_TYPE_FAT32 FS_DRIVER_TYPE_FAT(0x32)
 #define FS_DRIVER_TYPE_EXFAT FS_DRIVER_TYPE_FAT(0x33)
-
 #define FS_DRIVER_TYPE_NTFS  'NTFS'
 
+// Driver Interface struct
 typedef struct _FS_DRIVER {
 	UINT32 partition_index;
 	UINT32 fs_type; // FS_DRIVER_TYPE_...
@@ -185,7 +267,10 @@ typedef struct _FS_DRIVER {
 	FS_SET_FILE_INFO set_info;
 } FS_DRIVER, * PFS_DRIVER;
 
+// Driver creation function
 PFS_DRIVER createDriver(_In_ PVDISK vdisk, _In_opt_ UINT32 partition_index);
+
+// creates a Driver for the currently selected vdisk and partition
 PFS_DRIVER getSelDrv();
 
 #include "formats.h"
