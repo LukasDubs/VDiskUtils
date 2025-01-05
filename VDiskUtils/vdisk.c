@@ -470,6 +470,5 @@ PFS_DRIVER getSelDrv() {
 		errPrintf("No valid VDISK selected!\n\r");
 		return 0;
 	}
-	PFS_DRIVER driver = 0;
 	return createDriver(vdisk_list[currentVDISK], (DWORD)currentPartition);
 }

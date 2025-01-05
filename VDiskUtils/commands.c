@@ -99,7 +99,7 @@ size_t static prepStr(LPWSTR arg0) {
 #define OPEN_HELP "open [-i index | -f \"path\"]\n\r\t-i\t\tindex of vdisk to be opened\n\r\t-f\t\tpath to file to be opened\n\r\t-h\t\tshows this info\n\r"
 #define CLOSE_HELP "close [\"index of vdisk to close\"]\n\r"
 
-__inline static void clscmd(LPWSTR* args, size_t argc) {
+static void clscmd(LPWSTR* args, size_t argc) {
 	if (argc > 2) {
 		errPrintf("Invalid number of cls args\n\r");
 	}

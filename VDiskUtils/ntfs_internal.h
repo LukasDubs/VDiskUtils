@@ -4,20 +4,34 @@
 
 #define MAX_NTFS_HANDLES 0x200
 
+
+#define NTFS_INDEX_READER_ROOT_ONLY 0x1
+#define NTFS_INDEX_READER_NON_RESIDENT_BITMAP 0x2
+#define NTFS_INDEX_READER_CONTAINS_BITMAP 0x80000000
+
+typedef struct _NTFS_INDEX_READER {
+	UINT64 total_length;
+	UINT32 bytes_per_indr;
+	UINT32 flags;
+	PNTFS_INDEX_ENTRY entries_array;
+	PUINT8 bitmap;
+} NTFS_INDEX_READER, * PNTFS_INDEX_READER;
+
+typedef struct _NTFS_QUERY_INFO {
+	PUINT64 offset_buf;
+	UINT64 current_offset;
+	PNTFS_INDEX_READER reader;
+} NTFS_QUERY_INFO, * PNTFS_QUERY_INFO;
+
 #define NTFS_HANDLE_OPEN      0x8000
 #define NTFS_HANDLE_DIR       0x4000
 #define NTFS_HANDLE_QUERY     0x2000
 #define NTFS_HANDLE_RECURSIVE 0x1000
 
-typedef struct _NTFS_QUERY_INFO {
-	PUINT64 offset_buf;
-	PNTFS_INDEX_VALUE current_val;
-	PNTFS_INDEX_VALUE val;
-} NTFS_QUERY_INFO, * PNTFS_QUERY_INFO;
 
 typedef struct _NTFS_HANDLE {
 	UINT16 flags;
-	UINT16 recusrion_limit;
+	UINT16 recursion_limit;
 	UINT32 depth;
 	PNTFS_QUERY_INFO query_info;
 	NTFS_FILE_REF ref;
@@ -29,12 +43,12 @@ typedef struct _NTFS_HANDLE {
 
 #define IS_VALID_DRV(drv) ((drv != 0) && ((drv->signature & NTFS_SIGNATURE_MASK) == NTFS_SIGNATURE_VALID))
 
-#define NTFS_NEXT_ATTRIB(attrib) (PNTFS_STD_ATTRIB_HEADER)(((size_t)attrib) + (size_t)(((PNTFS_STD_ATTRIB_HEADER)attrib)->length))
-#define NTFS_RESIDENT_ATTR_DATA(attrib) (PVOID)(((size_t)attrib) + (size_t)(((PNTFS_STD_ATTRIB_HEADER)attrib)->resident.attrib_offset))
-#define NTFS_NON_RESIDENT_DATA_RUNS(attrib) (PVOID)(((size_t)attrib) + (size_t)(((PNTFS_STD_ATTRIB_HEADER)attrib)->non_resident.data_runs_offset))
+#define NTFS_NEXT_ATTRIB(attrib) (PNTFS_STD_ATTRIB_HEADER)(((size_t)(attrib)) + (size_t)(((PNTFS_STD_ATTRIB_HEADER)(attrib))->length))
+#define NTFS_RESIDENT_ATTR_DATA(attrib) (PVOID)(((size_t)(attrib)) + (size_t)(((PNTFS_STD_ATTRIB_HEADER)(attrib))->resident.attrib_offset))
+#define NTFS_NON_RESIDENT_DATA_RUNS(attrib) (PVOID)(((size_t)(attrib)) + (size_t)(((PNTFS_STD_ATTRIB_HEADER)(attrib))->non_resident.data_runs_offset))
 
-#define NTFS_INDEX_VALUE_NEXT(val) (PNTFS_INDEX_VALUE)(((size_t)val) + (size_t)(((PNTFS_INDEX_VALUE)val)->value_size))
-#define NTFS_INDEX_VALUE_SUBNODE_VCN(val) (UINT64*)(((size_t)val) + (size_t)(((PNTFS_INDEX_VALUE)val)->value_size) - 8);
+#define NTFS_INDEX_VALUE_NEXT(val) (PNTFS_INDEX_VALUE)(((size_t)(val)) + (size_t)(((PNTFS_INDEX_VALUE)(val))->value_size))
+#define NTFS_INDEX_VALUE_SUBNODE_VCN(val) (UINT64*)(((size_t)(val)) + (size_t)(((PNTFS_INDEX_VALUE)(val))->value_size) - 8);
 
 #define NTFS_DATA_RUN_FLAG_SPARSE     0x40000000
 #define NTFS_DATA_RUN_FLAG_COMPRESSED 0x80000000

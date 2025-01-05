@@ -104,7 +104,7 @@ BSTATUS setEOF(_In_ HANDLE file, _In_ UINT64 length) {
 	return TRUE;
 }
 
-LPWSTR __inline storePath(_In_ const LPCWSTR str) {
+LPWSTR storePath(_In_ const LPCWSTR str) {
 	size_t len = (wcslen(str) + 1) << 1; // len + 1 since we want to include the terminating null character
 	LPWSTR out = HeapAlloc(proc_heap, 0, len);
 	if (out == 0) {
@@ -134,7 +134,6 @@ BSTATUS parsePath(_In_ LPCWSTR usr_path, _Out_ LPWSTR* path, _Out_ LPWSTR** toke
 		deletePath(pth);
 		return FALSE;
 	}
-	size_t buflen = wcslen(token_buf) << 1;
 	LPWSTR pt = token_buf;
 	DWORD n_tok = 0;
 	while (*pt != 0) {

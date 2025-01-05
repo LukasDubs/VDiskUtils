@@ -107,9 +107,16 @@ NTSTATUS static readMFTEntry(_In_ PNTFS_DRIVER drv, _In_ size_t entry, _Out_ PNT
 	return STATUS_INTERNAL_ERROR;
 }
 
+NTSTATUS static readMFTEntry1(_In_ PNTFS_DRIVER drv, _In_ size_t entry, _In_ PNTFS_FILE_RECORD file) {
+	if (partitionRead(drv->interf.vdisk, drv->interf.partition_index, drv->lcn_mft * (size_t)drv->bytes_per_cluster + (size_t)drv->bytes_per_mft * entry, drv->bytes_per_mft, file)) {
+		return STATUS_SUCCESS;
+	}
+	return STATUS_INTERNAL_ERROR;
+}
+
 UINT64 static __inline parseRun(_In_ UINT8* data, _In_ UINT8 n) {
 	UINT64 out = 0;
-	for (int i = 0; i < n; i++) {
+	for (int i = 0; i < n; i++, data++) {
 		out |= ((UINT64)(*data)) << (i << 3);
 	}
 	if ((out & ((UINT64)1 << ((n << 3) - 1)))) {
@@ -118,7 +125,7 @@ UINT64 static __inline parseRun(_In_ UINT8* data, _In_ UINT8 n) {
 	return out;
 }
 
-NTSTATUS static __inline analyzeDataRuns(_Inout_ PNTFS_DATA_RUNS runs) {
+NTSTATUS static analyzeDataRuns(_Inout_ PNTFS_DATA_RUNS runs) {
 	if (runs->n == 0)return STATUS_INVALID_PARAMETER;
 	UINT64 vcn = 0;
 	UINT32 si = 0xffffffff;
@@ -246,61 +253,296 @@ NTSTATUS static dataRunRead(_In_ PNTFS_DRIVER drv, _In_ PNTFS_DATA_RUNS runs, _O
 	return STATUS_SUCCESS;
 }
 
-NTSTATUS static NTFSGetDirEntries(_In_ PNTFS_DRIVER drv, _In_ PNTFS_FILE_RECORD file, _Out_ PNTFS_INDEX_VALUE* vals, _Out_ PULONG64 length) {
+NTSTATUS static dataRunRead1(_In_ PNTFS_DRIVER drv, _In_ PNTFS_DATA_RUNS runs, _In_ PVOID data) {
+	UINT8* dt = data;
+	const UINT64 bpc = drv->bytes_per_cluster;
+	for (UINT32 i = 0; i < runs->n; i++) {
+		const UINT64 cl = runs->runs[i].length * bpc;
+		if ((runs->runs[i].flags & NTFS_DATA_RUN_FLAG_SPARSE) != 0) {
+			// do nothing
+		}
+		else if ((runs->runs[i].flags & NTFS_DATA_RUN_FLAG_COMPRESSED) != 0) {
+			// decompress, well fuck...
+		}
+		else {
+			if (!partitionRead(drv->interf.vdisk, drv->interf.partition_index, runs->runs[i].offset * bpc, cl, dt)) {
+				return STATUS_INTERNAL_ERROR;
+			}
+		}
+		dt += cl;
+	}
+	return STATUS_SUCCESS;
+}
+
+
+static __inline UINT64 getTotalLength(_In_ UINT8* data_run) {
+	UINT64 total_length = 0;
+	UINT8* rd = data_run;
+	while (*rd) {
+		UINT8 l = *rd & 0xf;
+		UINT8 h = (*rd >> 4) & 0xf;
+		++rd;
+		total_length += parseRun(rd, l);
+		rd += l + h;
+	}
+	return total_length;
+}
+
+NTSTATUS static NTFSGetDirEntries(_In_ PNTFS_DRIVER drv, _In_ PNTFS_FILE_RECORD file, _Out_ PNTFS_INDEX_READER* rdr) {
 	NTSTATUS status;
 	PNTFS_STD_ATTRIB_HEADER attr = (PNTFS_STD_ATTRIB_HEADER)(((size_t)file) + file->attribs_offset);
-	PNTFS_INDEX_ROOT root = 0; // TODO: check for multiple INDEX_ALLOCATION attributes and for $Bitmap attribute
-	UINT8* dr = 0;
+
+	PNTFS_INDEX_ROOT root = 0;
+	PNTFS_INDEX_READER reader = HeapAlloc(proc_heap, 0, sizeof(NTFS_INDEX_READER));
+	if (reader == 0) {
+		errPrintf("HeapAlloc failed:%x\n\r", GetLastError());
+		return STATUS_INTERNAL_ERROR;
+	}
+	memset(reader, 0, sizeof(NTFS_INDEX_READER));
+	UINT32 n_allocs = 0;
+	UINT64 tot_len = 0;
 
 	while (attr->id != NTFS_END_MARKER) {
 		if (attr->id == NTFS_INDEX_ROOT_ID) {
 			if ((attr->non_resident_flag != 0) || (root != 0)) {
+				HeapFree(proc_heap, 0, reader);
 				return STATUS_DISK_CORRUPT_ERROR;
 			}
 			root = NTFS_RESIDENT_ATTR_DATA(attr);
+			reader->bytes_per_indr = root->root.bytes_per_index_record;
 		}
 		else if (attr->id == NTFS_INDEX_ALLOCATION_ID) {
-			if ((attr->non_resident_flag != 1) || (dr != 0)) {
+			if (attr->non_resident_flag == 0) {
+				HeapFree(proc_heap, 0, reader);
 				return STATUS_DISK_CORRUPT_ERROR;
 			}
-			dr = NTFS_NON_RESIDENT_DATA_RUNS(attr);
+			tot_len += getTotalLength(NTFS_NON_RESIDENT_DATA_RUNS(attr));
+			++n_allocs;
 		}
 		else if (attr->id == NTFS_BITMAP_ID) {
+			if (attr->non_resident_flag == 0) {
+				reader->bitmap = HeapAlloc(proc_heap, 0, attr->resident.attrib_length);
+				if (reader->bitmap == 0) {
+					errPrintf("HeapAlloc failed:%x\n\r", GetLastError());
+					HeapFree(proc_heap, 0, reader);
+					return STATUS_INTERNAL_ERROR;
+				}
+				memcpy(reader->bitmap, NTFS_RESIDENT_ATTR_DATA(attr), attr->resident.attrib_length);
+			}
+			else {
+				PNTFS_DATA_RUNS data_runs;
+				status = parseDataRuns(NTFS_NON_RESIDENT_DATA_RUNS(attr), &data_runs);
+				if (status < 0) {
+					memset(data_runs, 0, (size_t)(data_runs->n - ANYSIZE_ARRAY) * sizeof(NTFS_DATA_RUN) + sizeof(NTFS_DATA_RUNS));
+					HeapFree(proc_heap, 0, data_runs);
+					HeapFree(proc_heap, 0, reader);
+					return status;
+				}
 
+				status = dataRunRead(drv, data_runs, &(reader->bitmap));
+				if (status < 0) {
+					memset(data_runs, 0, (size_t)(data_runs->n - ANYSIZE_ARRAY) * sizeof(NTFS_DATA_RUN) + sizeof(NTFS_DATA_RUNS));
+					HeapFree(proc_heap, 0, data_runs);
+					HeapFree(proc_heap, 0, reader);
+					return status;
+				}
+				reader->flags |= NTFS_INDEX_READER_NON_RESIDENT_BITMAP;
+				memset(data_runs, 0, (size_t)(data_runs->n - ANYSIZE_ARRAY) * sizeof(NTFS_DATA_RUN) + sizeof(NTFS_DATA_RUNS));
+				HeapFree(proc_heap, 0, data_runs);
+			}
 		}
 		attr = NTFS_NEXT_ATTRIB(attr);
 	}
 
 	if (root == 0) {
-		return STATUS_DISK_CORRUPT_ERROR;
+		status = STATUS_DISK_CORRUPT_ERROR;
+		goto _exit_with_error;
 	}
-	if (dr == 0) {
-		*vals = (PNTFS_INDEX_VALUE)(((size_t)root) + (size_t)root->node.values_offset + sizeof(NTFS_INDEX_ROOT_HEADER));
+
+	if (n_allocs == 0) {
+		reader->entries_array = HeapAlloc(proc_heap, 0, root->node.node_size - sizeof(NTFS_INDEX_NODE_HEADER));
+		if (reader->entries_array == 0) {
+			errPrintf("HeapAlloc failed:%x\n\r", GetLastError());
+			status = STATUS_INTERNAL_ERROR;
+			goto _exit_with_error;
+		}
+		memcpy(reader->entries_array, (PVOID)(((size_t)root) + (size_t)root->node.values_offset + sizeof(NTFS_INDEX_ROOT_HEADER)), root->node.node_size - sizeof(NTFS_INDEX_NODE_HEADER));
+		reader->bytes_per_indr = 0;
+		reader->total_length = 0;
+		reader->flags = NTFS_INDEX_READER_ROOT_ONLY;
+		*rdr = reader;
 		return STATUS_SUCCESS;
 	}
 
-	PNTFS_DATA_RUNS data_runs;
-	status = parseDataRuns(dr, &data_runs);
-	if (status < 0) {
-		memset(data_runs, 0, (size_t)(data_runs->n - ANYSIZE_ARRAY) * sizeof(NTFS_DATA_RUN) + sizeof(NTFS_DATA_RUNS));
-		HeapFree(proc_heap, 0, data_runs);
-		return status;
+	reader->total_length = tot_len;
+	PVOID alloc = VirtualAlloc(0, tot_len * (size_t)drv->bytes_per_cluster, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+	if (alloc == 0) {
+		errPrintf("VirtualAlloc failed:%x\n\r", GetLastError());
+		status = STATUS_INTERNAL_ERROR;
+		goto _exit_with_error;
 	}
+	reader->entries_array = alloc;
 
-	PNTFS_INDEX_ENTRY entries = 0;
-	status = dataRunRead(drv, data_runs, &entries);
-	if (status < 0) {
-		memset(data_runs, 0, (size_t)(data_runs->n - ANYSIZE_ARRAY) * sizeof(NTFS_DATA_RUN) + sizeof(NTFS_DATA_RUNS));
-		HeapFree(proc_heap, 0, data_runs);
-		return status;
+	attr = (PNTFS_STD_ATTRIB_HEADER)(((size_t)file) + file->attribs_offset);
+	while (attr->id != NTFS_END_MARKER) {
+		if (attr->id == NTFS_INDEX_ALLOCATION_ID) {
+			UINT8* dr = NTFS_NON_RESIDENT_DATA_RUNS(attr);
+			PNTFS_DATA_RUNS runs;
+			status = parseDataRuns(dr, &runs);
+			if (status < 0) {
+				goto _exit_alloc_parsing;
+			}
+			status = analyzeDataRuns(runs);
+			if (status < 0) {
+				HeapFree(proc_heap, 0, runs);
+				goto _exit_alloc_parsing;
+			}
+			status = dataRunRead1(drv, runs, alloc);
+			if (status < 0) {
+				HeapFree(proc_heap, 0, runs);
+				goto _exit_alloc_parsing;
+			}
+			alloc = (PVOID)((size_t)alloc + runs->total_length * (size_t)(drv->bytes_per_cluster));
+			HeapFree(proc_heap, 0, runs);
+		}
+		attr = NTFS_NEXT_ATTRIB(attr);
 	}
-
-	*vals = (PNTFS_INDEX_VALUE)(((size_t)entries) + (size_t)entries->node.values_offset + sizeof(NTFS_INDEX_ENTRY_HEADER));
-	*length = data_runs->total_length;
-	memset(data_runs, 0, (size_t)(data_runs->n - ANYSIZE_ARRAY) * sizeof(NTFS_DATA_RUN) + sizeof(NTFS_DATA_RUNS));
-	HeapFree(proc_heap, 0, data_runs);
+	*rdr = reader;
 	return STATUS_SUCCESS;
+_exit_alloc_parsing:
+	VirtualFree(reader->entries_array, 0, MEM_RELEASE);
+_exit_with_error:
+	if ((reader->flags & NTFS_INDEX_READER_CONTAINS_BITMAP) != 0) {
+		if ((reader->flags & NTFS_INDEX_READER_NON_RESIDENT_BITMAP) != 0) {
+			VirtualFree(reader->bitmap, 0, MEM_RELEASE);
+		}
+		else {
+			HeapFree(proc_heap, 0, reader->bitmap);
+		}
+	}
+	memset(reader, 0, sizeof(NTFS_INDEX_READER));
+	HeapFree(proc_heap, 0, reader);
+	return status;
+}
 
+static void freeIndexReader(_In_ PNTFS_INDEX_READER reader) {
+	VirtualFree(reader->entries_array, 0, MEM_RELEASE);
+	if ((reader->flags & NTFS_INDEX_READER_CONTAINS_BITMAP) != 0) {
+		if ((reader->flags & NTFS_INDEX_READER_NON_RESIDENT_BITMAP) != 0) {
+			VirtualFree(reader->bitmap, 0, MEM_RELEASE);
+		}
+		else {
+			HeapFree(proc_heap, 0, reader->bitmap);
+		}
+	}
+	memset(reader, 0, sizeof(NTFS_INDEX_READER));
+	HeapFree(proc_heap, 0, reader);
+}
+
+_Success_(return != 0) BOOL static getNextIndexValue(_In_ PNTFS_INDEX_READER reader, _In_ UINT64 bpc, _In_opt_ PNTFS_INDEX_VALUE current, _Out_ PNTFS_INDEX_VALUE* val) {
+	if ((reader->flags & NTFS_INDEX_READER_ROOT_ONLY) != 0) {
+		if (current == 0) {
+			current = (PNTFS_INDEX_VALUE)(reader->entries_array);
+			if (current->value_size == 0) {
+				return FALSE;
+			}
+			if (current->keysize == 0) {
+				goto _loop0_enter;
+			}
+			*val = current;
+			return TRUE;
+		}
+	_loop0_enter:
+		if ((current->value_flags & NTFS_INDEX_VALUE_FLAGS_IS_LAST) == 0) {
+			current = NTFS_INDEX_VALUE_NEXT(current);
+			if (current->value_size == 0) {
+				return FALSE;
+			}
+			if (current->keysize == 0) {
+				goto _loop0_enter;
+			}
+			*val = current;
+			return TRUE;
+		}
+		else {
+			return FALSE;
+		}
+	}
+	const size_t maxl = reader->total_length * bpc;
+	if (current == 0) {
+		size_t start_entry_offset = 0;
+		UINT8 i = 1;
+		UINT8* bmp = reader->bitmap;
+		while (((*bmp) & i) == 0) {
+			start_entry_offset += reader->bytes_per_indr;
+			if (start_entry_offset >= maxl) {
+				return FALSE; // empty?
+			}
+			if (i == 0x80) {
+				++bmp;
+				i = 1;
+			}
+			else {
+				i <<= 1;
+			}
+		}
+		PNTFS_INDEX_ENTRY ent = (PNTFS_INDEX_ENTRY)((size_t)(reader->entries_array) + start_entry_offset);
+		current = (PNTFS_INDEX_VALUE)((size_t)(ent) + sizeof(NTFS_INDEX_ENTRY_HEADER) + (size_t)(ent->node.values_offset));
+		if (current->value_size == 0) {
+			return FALSE;
+		}
+		if (current->keysize == 0) {
+			goto _loop1_enter;
+		}
+		*val = current;
+		return TRUE;
+	}
+_loop1_enter:
+	if ((current->value_flags & NTFS_INDEX_VALUE_FLAGS_IS_LAST) == 0) {
+		current = NTFS_INDEX_VALUE_NEXT(current);
+		if (current->value_size == 0) {
+			return FALSE;
+		}
+		if (current->keysize == 0) {
+			goto _loop1_enter;
+		}
+		*val = current;
+		return TRUE;
+	}
+	else {
+		UINT8* bmp = reader->bitmap;
+		UINT64 nxt_i = (((size_t)current) - ((size_t)(reader->entries_array))) / ((size_t)(reader->bytes_per_indr)) + 1;
+		UINT64 n_off = nxt_i * bpc;
+		if (n_off >= maxl) {
+			return FALSE;
+		}
+		bmp += (nxt_i >> 3);
+		UINT8 i = 1 << (nxt_i & 0x7);
+
+		while (((*bmp) & i) == 0) {
+			n_off += reader->bytes_per_indr;
+			if (n_off >= maxl) {
+				return FALSE;
+			}
+			if (i == 0x80) {
+				++bmp;
+				i = 1;
+			}
+			else {
+				i <<= 1;
+			}
+		}
+		PNTFS_INDEX_ENTRY ent = (PNTFS_INDEX_ENTRY)((size_t)(reader->entries_array) + n_off);
+		current = (PNTFS_INDEX_VALUE)((size_t)(ent)+sizeof(NTFS_INDEX_ENTRY_HEADER) + (size_t)(ent->node.values_offset));
+		if (current->value_size == 0) {
+			return FALSE;
+		}
+		if (current->keysize == 0) {
+			goto _loop1_enter;
+		}
+		*val = current;
+		return TRUE;
+	}
 }
 
 NTSTATUS static NTFSGetFile(_In_ PNTFS_DRIVER drv, _In_ LPCWSTR* tokens, _In_ DWORD n_toks, _In_opt_ HANDLE currentPath, _Out_ PNTFS_FILE_REF mft_index, PNTFS_FILE_RECORD* file_rec) {
@@ -332,13 +574,14 @@ NTSTATUS static NTFSGetFile(_In_ PNTFS_DRIVER drv, _In_ LPCWSTR* tokens, _In_ DW
 		memcpy(file, hdl->file_record, drv->bytes_per_mft);
 	}
 
-	PNTFS_INDEX_VALUE val;
-	ULONG64 len;
-	status = NTFSGetDirEntries(drv, file, &val, &len);
+	PNTFS_INDEX_READER reader;
+	status = NTFSGetDirEntries(drv, file, &reader);
 	if (status < 0) {
 		VirtualFree(file, 0, MEM_RELEASE);
 		return status;
 	}
+	PNTFS_INDEX_VALUE v;
+	getNextIndexValue(reader, drv->bytes_per_cluster, 0, &v);
 	DWORD i = 0;
 	while (i < n_toks) {
 		size_t toklen = wcslen(tokens[i]);
@@ -366,24 +609,23 @@ NTSTATUS static NTFSGetFile(_In_ PNTFS_DRIVER drv, _In_ LPCWSTR* tokens, _In_ DW
 				}
 			}
 		}
-		BOOL found = FALSE;
 		do {
-			PNTFS_FILE_NAME name = (PNTFS_FILE_NAME)(((size_t)val) + sizeof(NTFS_INDEX_VALUE));
+			if (v->keysize == 0) {
+				continue;
+			}
+			PNTFS_FILE_NAME name = (PNTFS_FILE_NAME)(((size_t)v) + sizeof(NTFS_INDEX_VALUE));
 			dbgPrintf("name:%.*ws\n\r", name->n_chars, (PWCHAR)(((size_t)name) + sizeof(NTFS_FILE_NAME)));
 			if (name->n_chars == toklen) {
 				if (wcsncmp((PCWCHAR)(((size_t)name) + sizeof(NTFS_FILE_NAME)), tokens[i], name->n_chars) == 0) {
-					ref = val->file_ref;
+					ref = v->file_ref;
 					goto _next_file;
 				}
 			}
-			val = NTFS_INDEX_VALUE_NEXT(val);
-		} while ((val->value_flags & NTFS_INDEX_VALUE_FLAGS_IS_LAST) == 0);
+		} while (getNextIndexValue(reader, drv->bytes_per_cluster, v, &v));
 		status = STATUS_OBJECT_PATH_NOT_FOUND;
 		goto _ntfs_get_file_exit;
 	_next_file:
-		VirtualFree(file, 0, MEM_RELEASE);
-		file = 0;
-		status = readMFTEntry(drv, ref.mft_index, &file);
+		status = readMFTEntry1(drv, ref.mft_index, file);
 		if (status < 0) {
 			goto _ntfs_get_file_exit_nofile;
 		}
@@ -393,11 +635,13 @@ NTSTATUS static NTFSGetFile(_In_ PNTFS_DRIVER drv, _In_ LPCWSTR* tokens, _In_ DW
 				goto _ntfs_get_file_exit;
 			}
 			else {
-				status = NTFSGetDirEntries(drv, file, &val, &len);
+				freeIndexReader(reader);
+				status = NTFSGetDirEntries(drv, file, &reader);
 				if (status < 0) {
 					VirtualFree(file, 0, MEM_RELEASE);
 					return status;
 				}
+				getNextIndexValue(reader, drv->bytes_per_cluster, 0, &v);
 			}
 		}
 		++i;
@@ -406,11 +650,11 @@ NTSTATUS static NTFSGetFile(_In_ PNTFS_DRIVER drv, _In_ LPCWSTR* tokens, _In_ DW
 	*mft_index = ref;
 	*file_rec = file;
 _ntfs_get_file_exit_nofile:
-	VirtualFree(val, 0, MEM_RELEASE);
+	freeIndexReader(reader);
 	return status;
 _ntfs_get_file_exit:
 	VirtualFree(file, 0, MEM_RELEASE);
-	VirtualFree(val, 0, MEM_RELEASE);
+	freeIndexReader(reader);
 	return status;
 }
 
@@ -455,12 +699,14 @@ NTSTATUS NTFSClose(_In_ PNTFS_DRIVER drv, _In_ HANDLE handle) {
 		if ((size_t)handle < MAX_NTFS_HANDLES) {
 			PNTFS_HANDLE hdl = &(drv->handle_table[(size_t)handle]);
 			if ((hdl->flags & NTFS_HANDLE_OPEN) != 0) {
+				UINT32 f = hdl->flags;
 				hdl->flags = 0;
 				VirtualFree(hdl->file_record, 0, MEM_RELEASE);
-
-				if ((hdl->flags & NTFS_HANDLE_QUERY) != 0) {
-					VirtualFree(hdl->query_info->val, 0, MEM_RELEASE);
-					VirtualFree(hdl->query_info->offset_buf, 0, MEM_RELEASE);
+				if ((f & NTFS_HANDLE_QUERY) != 0) {
+					if ((f & NTFS_HANDLE_RECURSIVE) != 0) {
+						VirtualFree(hdl->query_info->offset_buf, 0, MEM_RELEASE);
+					}
+					freeIndexReader(hdl->query_info->reader);
 					memset(hdl->query_info, 0, sizeof(NTFS_QUERY_INFO));
 					HeapFree(proc_heap, 0, hdl->query_info);
 				}
@@ -680,47 +926,67 @@ NTSTATUS NTFSGetInfo(_In_ PNTFS_DRIVER drv, _In_ HANDLE handle, _In_ FS_INFO_TYP
 		PFS_GET_FIRST_INFO info = query_data;
 		size_t i = allocHandle(drv);
 		PNTFS_HANDLE qhdl = &(drv->handle_table[i]);
-		
+		qhdl->flags |= NTFS_HANDLE_OPEN | NTFS_HANDLE_QUERY;
+
 		qhdl->query_info = HeapAlloc(proc_heap, 0, sizeof(NTFS_QUERY_INFO));
 		if (qhdl->query_info == 0) {
 			errPrintf("HeapAlloc failed:%x\n\r", GetLastError());
 			qhdl->flags = 0;
 			return STATUS_INTERNAL_ERROR;
 		}
+		memset(qhdl->query_info, 0, sizeof(NTFS_QUERY_INFO));
 
-		UINT16 rl = (info->recursion_limit - 1) > 0xFFFE ? 0xFFFF : info->recursion_limit;
-
-		qhdl->query_info->offset_buf = VirtualAlloc(0, rl * sizeof(UINT32), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-		if (qhdl->query_info->offset_buf == 0) {
-			memset(qhdl->query_info, 0, sizeof(NTFS_QUERY_INFO));
-			HeapFree(proc_heap, 0, qhdl->query_info);
-			qhdl->flags = 0;
-			return STATUS_INTERNAL_ERROR;
+		UINT16 rl;
+		if (info->recursive) {
+			rl = (info->recursion_limit - 1) > 0xFFFE ? 0xFFFF : info->recursion_limit;
+			qhdl->flags |= NTFS_HANDLE_RECURSIVE;
+			qhdl->query_info->offset_buf = VirtualAlloc(0, rl * sizeof(UINT32), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+			if (qhdl->query_info->offset_buf == 0) {
+				memset(qhdl->query_info, 0, sizeof(NTFS_QUERY_INFO));
+				HeapFree(proc_heap, 0, qhdl->query_info);
+				qhdl->flags = 0;
+				return STATUS_INTERNAL_ERROR;
+			}
 		}
-		UINT64 len;
-		NTSTATUS status = NTFSGetDirEntries(drv, hdl->file_record, &qhdl->query_info->val, &len);
+		else {
+			rl = 1;
+			qhdl->query_info->offset_buf = 0;
+		}
+		NTSTATUS status = NTFSGetDirEntries(drv, file, &(qhdl->query_info->reader));
 		if (status < 0) {
-			VirtualFree(qhdl->query_info->offset_buf, 0, MEM_RELEASE);
+			if(qhdl->query_info->offset_buf != 0)
+				VirtualFree(qhdl->query_info->offset_buf, 0, MEM_RELEASE);
 			memset(qhdl->query_info, 0, sizeof(NTFS_QUERY_INFO));
 			HeapFree(proc_heap, 0, qhdl->query_info);
 			qhdl->flags = 0;
 			return status;
 		}
 
-		status = readMFTEntry(drv, qhdl->query_info->val->file_ref.mft_index, &(qhdl->file_record));
+		PNTFS_INDEX_VALUE v;
+		if (!getNextIndexValue(qhdl->query_info->reader, drv->bytes_per_cluster, 0, &v)) {
+			errPrintf("Something went wrong\n\r");
+			return STATUS_UNSUCCESSFUL;
+		}
+
+		qhdl->ref = v->file_ref;
+		status = readMFTEntry(drv, qhdl->ref.mft_index, &(qhdl->file_record));
 		if (status < 0) {
-			VirtualFree(qhdl->query_info->val, 0, MEM_RELEASE);
-			VirtualFree(qhdl->query_info->offset_buf, 0, MEM_RELEASE);
+			freeIndexReader(qhdl->query_info->reader);
+			if (qhdl->query_info->offset_buf != 0)
+				VirtualFree(qhdl->query_info->offset_buf, 0, MEM_RELEASE);
 			memset(qhdl->query_info, 0, sizeof(NTFS_QUERY_INFO));
 			HeapFree(proc_heap, 0, qhdl->query_info);
 			qhdl->flags = 0;
 			return status;
 		}
 
-		qhdl->flags |= NTFS_HANDLE_OPEN | NTFS_HANDLE_QUERY;
-		qhdl->recusrion_limit = rl;
+		if ((qhdl->file_record->flags & NTFS_FILE_RECORD_FLAG_IS_DIR) != 0) {
+			qhdl->flags |= NTFS_HANDLE_DIR;
+		}
+
+		qhdl->recursion_limit = rl;
 		qhdl->depth = 0;
-		qhdl->query_info->current_val = qhdl->query_info->val;
+		qhdl->query_info->current_offset = ((size_t)v) - ((size_t)(qhdl->query_info->reader->entries_array));
 
 		info->h_query = (HANDLE)i;
 
@@ -728,7 +994,166 @@ NTSTATUS NTFSGetInfo(_In_ PNTFS_DRIVER drv, _In_ HANDLE handle, _In_ FS_INFO_TYP
 
 	}
 	else if (info == FSGetNext) {
-		// TODO
+		NTSTATUS status;
+		if ((hdl->flags & NTFS_HANDLE_QUERY) == 0) {
+			return STATUS_INVALID_HANDLE;
+		}
+		PNTFS_QUERY_INFO qi = hdl->query_info;
+		if (((hdl->flags & NTFS_HANDLE_RECURSIVE) != 0) && ((hdl->flags & NTFS_HANDLE_DIR) != 0) && (hdl->depth < ((UINT32)(hdl->recursion_limit) - 1)) && (hdl->ref.mft_index != 0x05)) {
+			PNTFS_INDEX_READER nrdr;
+			status = NTFSGetDirEntries(drv, hdl->file_record, &nrdr);
+			if (status < 0) {
+				return status;
+			}
+			
+			PNTFS_INDEX_VALUE val;
+			if (getNextIndexValue(nrdr, drv->bytes_per_cluster, 0, &val)) {
+
+				PNTFS_FILE_RECORD old = hdl->file_record;
+				status = readMFTEntry(drv, val->file_ref.mft_index, &(hdl->file_record));
+				if (status < 0) {
+					hdl->file_record = old;
+					freeIndexReader(nrdr);
+					return status;
+				}
+				VirtualFree(old, 0, MEM_RELEASE);
+				hdl->ref = val->file_ref;
+				if ((hdl->file_record->flags & NTFS_FILE_RECORD_FLAG_IS_DIR) != 0) {
+					hdl->flags |= NTFS_HANDLE_DIR;
+				}
+				else {
+					hdl->flags &= ~NTFS_HANDLE_DIR;
+				}
+
+				qi->offset_buf[hdl->depth] = qi->current_offset;
+				++(hdl->depth);
+				freeIndexReader(hdl->query_info->reader);
+				qi->reader = nrdr;
+				qi->current_offset = ((size_t)val) - ((size_t)(nrdr->entries_array));
+
+				return STATUS_MORE_ENTRIES;
+			}
+			else {
+				freeIndexReader(nrdr);
+				goto _get_next_in_dir;
+			}
+		}
+		else {
+			PNTFS_INDEX_VALUE current;
+		_get_next_in_dir:
+			current = (PNTFS_INDEX_VALUE)(qi->current_offset + (size_t)(qi->reader->entries_array));
+			if (getNextIndexValue(qi->reader, drv->bytes_per_cluster, current, &current)) {
+				PNTFS_FILE_RECORD old = hdl->file_record;
+				status = readMFTEntry(drv, current->file_ref.mft_index, &(hdl->file_record));
+				if (status < 0) {
+					hdl->file_record = old;
+					return status;
+				}
+				hdl->ref = current->file_ref;
+
+				VirtualFree(old, 0, MEM_RELEASE);
+
+				if ((hdl->file_record->flags & NTFS_FILE_RECORD_FLAG_IS_DIR) != 0) {
+					hdl->flags |= NTFS_HANDLE_DIR;
+				}
+				else {
+					hdl->flags &= ~NTFS_HANDLE_DIR;
+				}
+
+				qi->current_offset = ((size_t)current) - ((size_t)(qi->reader->entries_array));
+				return STATUS_MORE_ENTRIES;
+			}
+
+
+			PNTFS_STD_ATTRIB_HEADER attr;
+			if (hdl->depth == 0) {
+				return STATUS_SUCCESS;
+			}
+			UINT32 depth = hdl->depth;
+			attr = (PNTFS_STD_ATTRIB_HEADER)(((size_t)file) + file->attribs_offset);
+			NTFS_FILE_REF parent_ref = { 0 };
+			while (attr->id != NTFS_END_MARKER) {
+				if (attr->id == NTFS_FILE_NAME_ID) {
+					PNTFS_FILE_NAME fs_name = NTFS_RESIDENT_ATTR_DATA(attr);
+					parent_ref = fs_name->parent_dir_file_ref;
+					goto _prnt_ref_fnd;
+				}
+				attr = NTFS_NEXT_ATTRIB(attr);
+			}
+			return STATUS_DISK_CORRUPT_ERROR;
+
+			PNTFS_FILE_RECORD dir;
+		_prnt_ref_fnd:
+			status = readMFTEntry(drv, parent_ref.mft_index, &dir);
+			if (status < 0) {
+				return status;
+			}
+
+			do {
+				attr = (PNTFS_STD_ATTRIB_HEADER)(((size_t)dir) + dir->attribs_offset);
+				while (attr->id != NTFS_END_MARKER) {
+					if (attr->id == NTFS_FILE_NAME_ID) {
+						PNTFS_FILE_NAME fs_name = NTFS_RESIDENT_ATTR_DATA(attr);
+						parent_ref = fs_name->parent_dir_file_ref;
+						goto _parent_ref_found;
+					}
+					attr = NTFS_NEXT_ATTRIB(attr);
+				}
+				VirtualFree(dir, 0, MEM_RELEASE);
+				return STATUS_DISK_CORRUPT_ERROR;
+
+			_parent_ref_found:
+				status = readMFTEntry1(drv, parent_ref.mft_index, dir);
+				if (status < 0) {
+					VirtualFree(dir, 0, MEM_RELEASE);
+					return status;
+				}
+				PNTFS_INDEX_READER rdr;
+				status = NTFSGetDirEntries(drv, dir, &rdr);
+				if (status < 0) {
+					VirtualFree(dir, 0, MEM_RELEASE);
+					return status;
+				}
+				--depth;
+
+				PNTFS_INDEX_VALUE val = (PNTFS_INDEX_VALUE)(((size_t)(rdr->entries_array)) + (qi->offset_buf[depth]));
+				if (getNextIndexValue(rdr, drv->bytes_per_cluster, val, &val)) {
+					
+					PNTFS_FILE_RECORD old = hdl->file_record;
+					status = readMFTEntry(drv, val->file_ref.mft_index, &(hdl->file_record));
+					if (status < 0) {
+						hdl->file_record = old;
+						freeIndexReader(rdr);
+						return status;
+					}
+					VirtualFree(old, 0, MEM_RELEASE);
+					hdl->ref = val->file_ref;
+					if ((hdl->file_record->flags & NTFS_FILE_RECORD_FLAG_IS_DIR) != 0) {
+						hdl->flags |= NTFS_HANDLE_DIR;
+					}
+					else {
+						hdl->flags &= ~NTFS_HANDLE_DIR;
+					}
+
+					qi->offset_buf[hdl->depth] = qi->current_offset;
+					++(hdl->depth);
+					freeIndexReader(qi->reader);
+					qi->reader = rdr;
+					qi->current_offset = ((size_t)val) - ((size_t)(rdr->entries_array));
+
+					hdl->depth = depth;
+
+					return STATUS_MORE_ENTRIES;
+
+				}
+
+				if (depth == 0) {
+					hdl->depth = depth;
+					return STATUS_SUCCESS;
+				}
+
+			} while (TRUE);
+		}
 	}
 	else if (info == FSGetPhys) {
 

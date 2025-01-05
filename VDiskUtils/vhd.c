@@ -177,8 +177,6 @@ BSTATUS dynamicVHDRead(_Inout_ PVDISK vdisk, _In_opt_ size_t offset, _In_ size_t
 		return TRUE;
 
 	}
-	
-	return FALSE;
 }
 
 // unt(ru/e)sted -> pray for it working!
@@ -320,8 +318,6 @@ BSTATUS dynamicVHDWrite(_Inout_ PVDISK vdisk, _In_opt_ size_t offset, _In_ size_
 		return TRUE;
 
 	}
-
-	return FALSE;
 }
 
 void exitDynamicVHDDriver(_In_ PVHD_FIXED_DRIVER t) {

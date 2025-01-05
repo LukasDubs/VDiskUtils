@@ -1131,8 +1131,6 @@ NTSTATUS static fat32GetFile(_In_ PFAT_DRIVER_IMPL drv, _In_ LPCWSTR* tokens, _I
 
         for (DWORD i = 0; i < n_tokens; i++) {
             if (*(tokens[i]) == 0)break;
-            LPWSTR buf_current = chbuf;
-            size_t bi = 0;
             size_t maxlen = wcslen(tokens[i]) + 1;
             if (maxlen > 256) {
                 status = STATUS_INVALID_PARAMETER;

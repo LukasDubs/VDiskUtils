@@ -137,7 +137,7 @@ typedef struct _NTFS_STD_ATTRIB_NON_RESIDENT_FOOTER {
 typedef struct _NTFS_STD_ATTRIB_HEADER {
 	UINT32 id;
 	UINT32 length;
-	UINT8 non_resident_flag; // 0x00
+	UINT8 non_resident_flag;
 	UINT8 name_length;
 	UINT16 name_offset;
 	UINT16 flags;
